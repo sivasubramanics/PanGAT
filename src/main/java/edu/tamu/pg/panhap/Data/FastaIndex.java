@@ -241,7 +241,8 @@ public class FastaIndex implements AutoCloseable {
             Logger.error(CLASS_NAME, "Fasta file is compressed. Please decompress before indexing: " + fastaFile);
             throw new IllegalArgumentException("Fasta file is compressed. Please decompress before indexing: " + fastaFile);
         }
-
+        long totalLength = 0;
+        String baseName = fastaFile.getName();
         try (BufferedReader reader = new BufferedReader(new FileReader(fastaFile));
              BufferedWriter writer = new BufferedWriter(new FileWriter(indexFile))) {
 
@@ -264,6 +265,7 @@ public class FastaIndex implements AutoCloseable {
                 if (line.startsWith(">")) {
                     if (inSequence) {
                         writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset + "\t" + lineBases + "\t" + lineWidth + "\n");
+                        totalLength += seqLength;
                     }
                     currentName = line.substring(1).split(" ")[0];
                     offset += line.length() + System.lineSeparator().length();
@@ -294,8 +296,11 @@ public class FastaIndex implements AutoCloseable {
             }
             if (inSequence && currentName != null) {
                 writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset + "\t" + lineBases + "\t" + lineWidth + "\n");
+                totalLength += seqLength;
             }
         }
+        Logger.info(CLASS_NAME, String.format("Total length (%s): %,d bases", baseName, totalLength));
+
     }
 
     /***

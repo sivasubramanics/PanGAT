@@ -5,13 +5,13 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
-import static edu.tamu.pg.panhap.Utils.HelperFunctions.fold_seq;
+import edu.tamu.pg.panhap.Utils.HelperFunctions;
+import edu.tamu.pg.panhap.Utils.Defaults;
 
 /***
  * This class represents a Fasta object with thread-safe operations.
  */
 public class Fasta implements Serializable {
-    private static final int FOLDLEN = 60;
     // sync lock for thread safety
     private final Object lock = new Object();
 
@@ -45,7 +45,7 @@ public class Fasta implements Serializable {
         synchronized (lock) {
             try {
                 writer.write(">" + name + " " + description + "\n");
-                writer.write(fold_seq(sequence, FOLDLEN));
+                writer.write(HelperFunctions.fold_seq(sequence, Defaults.FASTA_FOLD_LENGTH));
             } catch (Exception e) {
                 e.printStackTrace();
             }
@@ -60,7 +60,7 @@ public class Fasta implements Serializable {
     public String toFastaString(boolean fold) {
         synchronized (lock) {
             if (fold) {
-                return ">" + name + " " + description + "\n" + fold_seq(sequence, FOLDLEN);
+                return ">" + name + " " + description + "\n" + HelperFunctions.fold_seq(sequence, Defaults.FASTA_FOLD_LENGTH);
             } else {
                 return ">" + name + " " + description + "\n" + sequence + "\n";
             }
@@ -169,7 +169,7 @@ public class Fasta implements Serializable {
     @Override
     public String toString() {
         synchronized (lock) {
-            return ">" + name + " " + description + "\n" + fold_seq(sequence, FOLDLEN);
+            return ">" + name + " " + description + "\n" + HelperFunctions.fold_seq(sequence, Defaults.FASTA_FOLD_LENGTH);
         }
     }
 

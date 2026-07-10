@@ -111,6 +111,12 @@ public class FileUtils {
         }
     }
 
+    public static void copyFile(String sourcePath, String targetPath) {
+        File sourceFile = new File(sourcePath);
+        File targetFile = new File(targetPath);
+        copyFile(sourceFile, targetFile);
+    }
+
     public static void copyFile(File clusterFile, File targetFile) {
         try {
             if (!targetFile.exists()) {
