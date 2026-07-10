@@ -76,6 +76,12 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         while (!executor.isTerminated()) {
             // Wait for all tasks to complete
         }
+
+        for  (String id : genomesMap.keySet()) {
+            // run kmc for each genome
+            String kmcCmd = "kmc "
+            HelperFunctions.printCommandLine(new CommandLine(this), CLASS_NAME);
+        }
         Logger.info(CLASS_NAME, "Reference genome preparation completed.");
     }
 
