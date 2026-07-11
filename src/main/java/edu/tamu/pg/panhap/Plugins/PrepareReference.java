@@ -2,14 +2,18 @@ package edu.tamu.pg.panhap.Plugins;
 
 import edu.tamu.pg.panhap.Data.*;
 import edu.tamu.pg.panhap.Utils.*;
+
 import picocli.CommandLine;
 import picocli.CommandLine.*;
-
 import java.io.*;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.*;
+import java.util.concurrent.ExecutionException;
 
 @Command(name = "PrepareReferences", description = "Prepare the reference genome for PanHap", sortOptions = false)
 public class PrepareReference implements Callable<Integer>, Runnable {
@@ -18,13 +22,42 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     private String genomes;
 
     @Option(names = {"-b", "--basedir"}, description = "Base directory for the output", required = true)
-    private String basedir;
+    private String baseDir;
 
     @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing", required = false, defaultValue = "1")
     private int threads;
 
+    @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC", required = false, defaultValue = "31")
+    private int kmerSize;
+
+    @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "2")
+    private int minCount;
+
     private static final String CLASS_NAME = PrepareReference.class.getSimpleName();
+
+    private Path genomesDir;
+    private Path kmcDir;
+    private Path singleCopyDir;
+
+    double HEAPSIZE = Runtime.getRuntime().maxMemory() / (1024.0 * 1024 * 1024);
+
+
     public Integer call() throws Exception {
+        // if heap size is less than 2GB, KMC won't run
+        if (HEAPSIZE < 2.2) {
+            Logger.warning(CLASS_NAME, "Max heap size is less than 2.2GB. KMC may fail due to insufficient memory.");
+        }
+
+        // check if necessary tools are accessible
+        checkDependencies();
+
+        // remove trailing "/" from the base_dir
+        while (baseDir.endsWith(File.separator)) {
+            baseDir = baseDir.substring(0, baseDir.length() - File.separator.length());
+        }
+        genomesDir = Paths.get(baseDir, PipelineSteps.GENOMES.dirName());
+        kmcDir = Paths.get(baseDir, PipelineSteps.KMC.dirName());
+        singleCopyDir = Paths.get(baseDir, PipelineSteps.SINGLE_COPY.dirName());
         prepareReference();
         return 0;
     }
@@ -49,40 +82,98 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     private void prepareReference() throws IOException {
 
         // read genome map file
-        HashMap<String, String> genomesMap = readGenomesMap(genomes);
+        Map<String, String> genomesMap = readGenomesMap(genomes);
         Logger.info(CLASS_NAME, "Read " + genomesMap.size() + " entries from genomes map file.");
+
+        // fix and copy the genomes to output dir
+        fixGenomes(genomesMap);
+
+        // run KMC for each genome to do kmer counting
+        runKMC(genomesMap);
+
+        extractSingleCopyRegions(genomesMap);
+
+        Logger.info(CLASS_NAME, "Reference genome preparation completed.");
+    }
+
+    private void fixGenomes(Map<String, String> genomesMap) throws IOException {
         // create directory structure under baseDir
         // baseDir + "/00.genomes"
-
-        String GENOMES_DIR = basedir + File.separator + PipelineSteps.PREP_GENOME.dirName();
         Logger.info(CLASS_NAME, "Preparing reference genome from map file: " + genomes);
-        FileUtils.mkdir(GENOMES_DIR);
+        FileUtils.mkdir(genomesDir);
         // read the genome fasta and rewrite into 00.genomes directory. This is mainly to fix the genome fasta in the format we can work with.
         // sometimes the genomes fasta header might contain tabs instead of spaces, also it can be single [long] line fasta instead of multi line.
         ExecutorService executor = Executors.newFixedThreadPool(threads);
-        for (String id : genomesMap.keySet()) {
-            String genomePath = genomesMap.get(id);
-            String destPath = GENOMES_DIR + File.separator + id + ".fasta";
-            executor.submit(() -> {
+        List<Future<?>> futures = new ArrayList<>();
+
+        try {
+            for (Map.Entry<String, String> entry : genomesMap.entrySet()) {
+                String id = entry.getKey();
+                String genomePath = entry.getValue();
+                Path destPath = genomesDir.resolve(id + ".fasta");
+
+                futures.add(executor.submit(() -> {
+                    processGenome(destPath.toString(), genomePath);
+                    return null;
+                }));
+            }
+
+            // Wait for all tasks and propagate failures.
+            for (Future<?> future : futures) {
                 try {
-                    processGenome(destPath, genomePath);
-                } catch (IOException e) {
-                    Logger.error(CLASS_NAME, "Error processing genome: " + genomePath);
-                    throw new RuntimeException(e);
+                    future.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Genome processing interrupted.", e);
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+
+                    if (cause instanceof IOException io) {
+                        throw io;
+                    }
+
+                    throw new IOException("Unexpected error while processing genomes.", cause);
                 }
-            });
+            }
+        } finally {
+            executor.shutdownNow();
         }
-        executor.shutdown();
-        while (!executor.isTerminated()) {
-            // Wait for all tasks to complete
+    }
+
+    private void extractSingleCopyRegions(Map<String, String> genomesMap) throws IOException {
+        for (Map.Entry<String, String> entry : genomesMap.entrySet()) {
+            String id = entry.getKey();
+
+            KMC kmc = new KMC(kmcDir.resolve(id).toString());
+
+            kmc.close();
         }
+    }
+
+    private void runKMC(Map<String, String> genomesMap) throws IOException {
+
+        // create tmp directory for kmc under base_dir / 01.kmc /tmp
+        FileUtils.mkdir(kmcDir.resolve("tmp"));
+
 
         for  (String id : genomesMap.keySet()) {
-            // run kmc for each genome
-            String kmcCmd = "kmc "
-            HelperFunctions.printCommandLine(new CommandLine(this), CLASS_NAME);
+            String logKMCpath = kmcDir.resolve(id + ".kmc.log").toString();
+            StringBuilder kmcCmd =  new StringBuilder("kmc ");
+            kmcCmd.append("-k").append(kmerSize).append(" ");
+            kmcCmd.append("-p").append(Defaults.SIGNATURE_LENGTH).append(" ");
+            kmcCmd.append("-ci").append("1").append(" ");
+            kmcCmd.append("-t").append(threads).append(" ");
+            kmcCmd.append("-m").append(HEAPSIZE).append(" ");
+            kmcCmd.append("-fm").append(" ");
+            kmcCmd.append(genomesDir).append(File.separator).append(id).append(".fasta").append(" ");
+            kmcCmd.append(kmcDir).append(File.separator).append(id).append(" ");
+            kmcCmd.append(kmcDir).append(File.separator).append("tmp");
+
+            Logger.info(CLASS_NAME, "Running KMC for genome: " + id);
+            Logger.info(CLASS_NAME, "KMC command: " + kmcCmd.toString());
+            HelperFunctions.tryExec(kmcCmd.toString(), logKMCpath, logKMCpath);
         }
-        Logger.info(CLASS_NAME, "Reference genome preparation completed.");
+        FileUtils.rmdir(kmcDir.resolve("tmp"));
     }
 
     /***
@@ -113,8 +204,8 @@ public class PrepareReference implements Callable<Integer>, Runnable {
      * @return
      * @throws IOException
      */
-    private HashMap<String, String> readGenomesMap(String genomesMapFile) throws IOException {
-        HashMap<String, String> genomesMap = new HashMap<>();
+    private Map<String, String> readGenomesMap(String genomesMapFile) throws IOException {
+        Map<String, String> genomesMap = new HashMap<>();
         Logger.info(CLASS_NAME, "Reading genomes map from: " + genomesMapFile);
         try (BufferedReader reader = new BufferedReader(new FileReader(genomesMapFile))) {
 
@@ -140,6 +231,7 @@ public class PrepareReference implements Callable<Integer>, Runnable {
 
                 String[] parts = line.split(",", 2);
 
+                // if the number of columns are not 2, throw an error
                 if (parts.length != 2) {
                     Logger.error(CLASS_NAME,
                             "Invalid line " + lineNumber + " in genomes map file: " + line);
@@ -150,6 +242,15 @@ public class PrepareReference implements Callable<Integer>, Runnable {
                 String id = parts[0].trim();
                 String path = parts[1].trim();
 
+                // if id or path is empty skipt the entry
+                if (id.isEmpty() || path.isEmpty()) {
+                    Logger.warning(CLASS_NAME,
+                            "Empty ID or path on line " + lineNumber + ". Skipping entry.");
+                    lineNumber++;
+                    continue;
+                }
+
+                // if the ids are repeated, skip
                 if (genomesMap.containsKey(id)) {
                     Logger.warning(CLASS_NAME,
                             "Duplicate entry for ID '" + id + "' on line " + lineNumber + ". Overwriting previous value.");
@@ -159,6 +260,29 @@ public class PrepareReference implements Callable<Integer>, Runnable {
             }
         }
         return genomesMap;
+    }
+
+    private void checkDependencies() throws IOException {
+        List<String> requiredTools = List.of(
+                "kmc",
+                "mmseqs"
+        );
+
+        List<String> missingTools = new ArrayList<>();
+
+        for (String tool : requiredTools) {
+            if (!HelperFunctions.isInstalled(tool)) {
+                missingTools.add(tool);
+            }
+        }
+
+        if (!missingTools.isEmpty()) {
+            String message = "Missing required tools: " + String.join(", ", missingTools)
+                    + ". Please install them and ensure they are available in your system PATH.";
+
+            Logger.error(CLASS_NAME, message);
+            throw new IOException(message);
+        }
     }
 }
 

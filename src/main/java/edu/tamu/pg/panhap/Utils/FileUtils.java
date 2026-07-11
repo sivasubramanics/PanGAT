@@ -13,17 +13,35 @@ public class FileUtils {
 
     /***
      * Create directory on the file system recursively (something like mkdir -p dirName)
-     * @param dirName
+     * @param dir
      * @return
      * @throws IOException
      */
-    public static boolean mkdir(String dirName) throws IOException {
-        File dir = new File(dirName);
-        if (!dir.exists()) {
-            return dir.mkdirs();
-        }
+    public static boolean mkdir(Path dir) throws IOException {
+        Files.createDirectories(dir);
         return true;
     }
+
+    public static boolean mkdir(String dirName) throws IOException {
+        return mkdir(Path.of(dirName));
+    }
+
+    public static boolean mkdir(File dir) throws IOException {
+        return mkdir(dir.toPath());
+    }
+
+    public static void rmdir(Path dir) throws IOException {
+        Files.deleteIfExists(dir);
+    }
+
+    public static void rmdir(String dirName) throws IOException {
+        rmdir(Path.of(dirName));
+    }
+
+    public static void rmdir(File dir) throws IOException {
+        rmdir(dir.toPath());
+    }
+
 
     public static boolean cleanTmpDir(File tmpDir) {
         if (tmpDir == null || !tmpDir.exists() || !tmpDir.isDirectory()) {

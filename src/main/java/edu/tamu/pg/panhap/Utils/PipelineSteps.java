@@ -1,8 +1,9 @@
 package edu.tamu.pg.panhap.Utils;
 
 public enum PipelineSteps {
-    PREP_GENOME("00.genomes"),
-    SINGLE_COPY("01.single_copy_regions");
+    GENOMES("00.genomes"),
+    KMC("01.kmc"),
+    SINGLE_COPY("02.single_copy");
 
     private final String dirName;
 
