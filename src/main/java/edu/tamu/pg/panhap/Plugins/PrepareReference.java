@@ -142,9 +142,33 @@ public class PrepareReference implements Callable<Integer>, Runnable {
 
     private void extractSingleCopyRegions(Map<String, String> genomesMap) throws IOException {
         for (Map.Entry<String, String> entry : genomesMap.entrySet()) {
+
             String id = entry.getKey();
 
             KMC kmc = new KMC(kmcDir.resolve(id).toString());
+            FastaReader genome = new FastaReader(genomesDir.resolve(id + ".fasta").toString());
+
+            int k = kmc.getKmerLength();
+
+            for (Fasta chrom : genome) {
+
+                boolean isBegin = true;
+                int regionStart = -1;
+                int lastLowKmerStart = -1;
+
+                for (KmerPosition kp : chrom.kmers(
+                        k,
+                        kmc.getPrefixLength(),
+                        kmc.isBothStrands())) {
+
+                    int start = kp.getStartPos();
+                    Kmer kmer = kp.getKmer();
+
+
+
+                }
+
+            }
 
             kmc.close();
         }

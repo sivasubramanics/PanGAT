@@ -4,6 +4,9 @@ import java.io.BufferedWriter;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Arrays;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
 
 import edu.tamu.pg.panhap.Utils.HelperFunctions;
 import edu.tamu.pg.panhap.Utils.Defaults;
@@ -81,6 +84,92 @@ public class Fasta implements Serializable {
     public String getUppercaseSequence() {
         synchronized (lock) {
             return sequence.toUpperCase();
+        }
+    }
+
+    public Iterable<KmerPosition> kmers(
+            int kmerLength,
+            int prefixLength,
+            boolean useCanonical) {
+
+        synchronized (lock) {
+            // Snapshot the sequence so iteration is safe even if another thread
+            // modifies the Fasta object later.
+            final String seq = sequence;
+
+            return () -> new Iterator<KmerPosition>() {
+
+                private final char[] kmerChars = new char[kmerLength];
+
+                private int index = 0;
+                private int validStart = 0;
+
+                private KmerPosition next = null;
+
+                @Override
+                public boolean hasNext() {
+                    if (next == null) {
+                        next = computeNext();
+                    }
+                    return next != null;
+                }
+
+                @Override
+                public KmerPosition next() {
+                    if (!hasNext()) {
+                        throw new NoSuchElementException();
+                    }
+
+                    KmerPosition result = next;
+                    next = null;
+                    return result;
+                }
+
+                private KmerPosition computeNext() {
+
+                    while (index < seq.length()) {
+
+                        char base = Character.toUpperCase(seq.charAt(index));
+
+                        if (!isValidBase(base)) {
+                            validStart = index + 1;
+                            Arrays.fill(kmerChars, '\0');
+                            index++;
+                            continue;
+                        }
+
+                        int offset = index - validStart;
+
+                        if (offset < kmerLength) {
+
+                            kmerChars[offset] = base;
+
+                            if (offset == kmerLength - 1) {
+                                Kmer kmer = new Kmer(kmerChars, prefixLength, useCanonical);
+                                KmerPosition result = new KmerPosition(validStart, kmer);
+                                index++;
+                                return result;
+                            }
+
+                        } else {
+
+                            System.arraycopy(kmerChars, 1, kmerChars, 0, kmerLength - 1);
+                            kmerChars[kmerLength - 1] = base;
+
+                            Kmer kmer = new Kmer(kmerChars, prefixLength, useCanonical);
+                            KmerPosition result =
+                                    new KmerPosition(index - kmerLength + 1, kmer);
+
+                            index++;
+                            return result;
+                        }
+
+                        index++;
+                    }
+
+                    return null;
+                }
+            };
         }
     }
 
