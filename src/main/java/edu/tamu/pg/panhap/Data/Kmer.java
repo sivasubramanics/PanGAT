@@ -22,6 +22,8 @@ public class Kmer implements Comparable<Kmer> {
     private byte[] suffixRev;
     private String reverseComplementKmer;
 
+    private char[] originalKmer;
+
     private static final String CLASS_NAME = Kmer.class.getName();
 
     public Kmer(String kmer) {
@@ -42,6 +44,7 @@ public class Kmer implements Comparable<Kmer> {
         this.suffixLength = this.kmerLength - prefixLength;
         this.isCanonical = isCanonical;
         this.kmerLong = kmerToLong(kmer);
+        this.originalKmer = Arrays.copyOfRange(kmer, 0, kmer.length);
         getCanonical();
     }
 
@@ -51,6 +54,7 @@ public class Kmer implements Comparable<Kmer> {
         this.suffixLength = this.kmerLength - prefixLength;
         this.isCanonical = isCanonical;
         this.kmerLong = Arrays.copyOf(kmerLong, kmerLong.length);
+        this.originalKmer = null;
         getCanonical();
     }
 
@@ -61,6 +65,9 @@ public class Kmer implements Comparable<Kmer> {
         this.suffixLength = kmer.getSuffixLength();
         this.isCanonical = isCanonical;
         this.kmerLong = Arrays.copyOf(kmer.kmerLong, kmer.kmerLong.length);
+        this.originalKmer = kmer.originalKmer == null
+                ? null
+                : Arrays.copyOf(kmer.originalKmer, kmer.originalKmer.length);
         getCanonical();
     }
 
@@ -475,6 +482,10 @@ public class Kmer implements Comparable<Kmer> {
         }
 
         return new Kmer(newKmerLong, this.kmerLength, this.prefixLength, this.isCanonical);
+    }
+
+    public char[] getOriginalKmer() {
+        return this.originalKmer;
     }
 }
 //EOF

@@ -6,12 +6,10 @@ import edu.tamu.pg.panhap.Utils.*;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
 import java.io.*;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.ExecutionException;
 
@@ -30,7 +28,7 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC", required = false, defaultValue = "31")
     private int kmerSize;
 
-    @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "2")
+    @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "1")
     private int minCount;
 
     private static final String CLASS_NAME = PrepareReference.class.getSimpleName();
@@ -40,6 +38,7 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     private Path singleCopyDir;
 
     double HEAPSIZE = Runtime.getRuntime().maxMemory() / (1024.0 * 1024 * 1024);
+    int COUNTER_DUMP_SIZE = 100_000;
 
 
     public Integer call() throws Exception {
@@ -141,36 +140,91 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     }
 
     private void extractSingleCopyRegions(Map<String, String> genomesMap) throws IOException {
-        for (Map.Entry<String, String> entry : genomesMap.entrySet()) {
 
+        FileUtils.mkdir(singleCopyDir);
+
+        for (Map.Entry<String, String> entry : genomesMap.entrySet()) {
             String id = entry.getKey();
 
             KMC kmc = new KMC(kmcDir.resolve(id).toString());
             FastaReader genome = new FastaReader(genomesDir.resolve(id + ".fasta").toString());
-
             int k = kmc.getKmerLength();
 
-            for (Fasta chrom : genome) {
+            // Larger buffer: 256KB instead of the default 8KB
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(singleCopyDir.resolve(id + ".fasta").toString()), 256 * 1024)) {
+                int counter = 0;
+                List<Fasta> singleCopyRegions = new ArrayList<>();
+                int numSingleCopy = 0;
+                for (Fasta chrom : genome) {
 
-                boolean isBegin = true;
-                int regionStart = -1;
-                int lastLowKmerStart = -1;
+                    StringBuilder singleCopySeq = new StringBuilder();
+                    boolean isBeginning = true;
+                    int regionStart = -1;     // track where the region began
+                    int currentEnd = -1;      // track the latest position seen
 
-                for (KmerPosition kp : chrom.kmers(
-                        k,
-                        kmc.getPrefixLength(),
-                        kmc.isBothStrands())) {
+                    KmerIterator it = chrom.kmers(k, kmc.getPrefixLength(), kmc.isBothStrands());
 
-                    int start = kp.getStartPos();
-                    Kmer kmer = kp.getKmer();
+                    while (it.hasNext()) {
+                        KmerPosition kp = it.next();
+                        int start = kp.getStartPos();
+                        Kmer kmer = kp.getKmer();
+                        int kmerCount = kmc.getCount(kmer);
 
+//                        if (kmerCount == 0){
+//                            Logger.error(CLASS_NAME, "Kmer not found in KMC database for genome: " + id + ", chromosome: " + chrom.getName() + ", kmer: " + Arrays.toString(kmer.getOriginalKmer()));
+//                        }
 
+                        if (kmerCount > 0 && kmerCount <= minCount) {
+                            if (isBeginning) {
+                                regionStart = start;
+                                singleCopySeq.append(kmer.getOriginalKmer());
+                                isBeginning = false;
+                            } else {
+                                // Append only the new last char — avoids a full String allocation
+                                singleCopySeq.append(kmer.getOriginalKmer()[k - 1]);
+                            }
+                            currentEnd = start + k;
 
+                        } else {
+                            if (!singleCopySeq.isEmpty()) {
+                                singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + ":" + regionStart + "-" + currentEnd, singleCopySeq.toString()));
+                                if (counter == COUNTER_DUMP_SIZE) {
+                                    for (Fasta scr: singleCopyRegions) {
+                                        writer.write(scr.toFastaString(true));
+                                    }
+                                    singleCopyRegions.clear();
+                                    Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for genome: " + id);
+                                    counter = 0;
+                                }
+                                counter++;
+                                numSingleCopy++;
+                                singleCopySeq.setLength(0);
+                            }
+                            isBeginning = true;
+                            regionStart = -1;
+                            it.skipTo(start + k);
+                        }
+                    }
+
+                    // ── Flush any region still open at end of chromosome ──
+                    if (!singleCopySeq.isEmpty()) {
+                        singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + ":" + regionStart + "-" + currentEnd, singleCopySeq.toString()));
+                        for (Fasta scr: singleCopyRegions) {
+                            writer.write(scr.toFastaString(true));
+                        }
+                        counter++;
+                        numSingleCopy++;
+                        singleCopySeq.setLength(0);
+                    }
+                    Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for genome: " + id);
                 }
 
-            }
+                kmc.close();    // once per genome, still inside try so writer flushes first
 
-            kmc.close();
+            } catch (IOException e) {
+                Logger.error(CLASS_NAME, "Error writing single copy regions for genome: " + id);
+                throw e;
+            }
         }
     }
 
@@ -186,6 +240,7 @@ public class PrepareReference implements Callable<Integer>, Runnable {
             kmcCmd.append("-k").append(kmerSize).append(" ");
             kmcCmd.append("-p").append(Defaults.SIGNATURE_LENGTH).append(" ");
             kmcCmd.append("-ci").append("1").append(" ");
+            kmcCmd.append("-cx").append(minCount).append(" ");
             kmcCmd.append("-t").append(threads).append(" ");
             kmcCmd.append("-m").append(HEAPSIZE).append(" ");
             kmcCmd.append("-fm").append(" ");
