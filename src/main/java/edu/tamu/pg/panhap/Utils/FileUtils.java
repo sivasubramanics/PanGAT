@@ -31,7 +31,7 @@ public class FileUtils {
     }
 
     public static void rmdir(Path dir) throws IOException {
-        Files.deleteIfExists(dir);
+        deleteRecursively(dir.toFile());
     }
 
     public static void rmdir(String dirName) throws IOException {
@@ -147,5 +147,13 @@ public class FileUtils {
         } catch (IOException e){
             Logger.error(CLASS_NAME, "Failed to copy file: " + e.getMessage());
         }
+    }
+
+    public static boolean isDir(String tmpDir) {
+        return tmpDir != null && new File(tmpDir).isDirectory();
+    }
+
+    public static boolean isFile(String tmpDir) {
+        return tmpDir != null && new File(tmpDir).isFile();
     }
 }
