@@ -31,6 +31,18 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "1")
     private int minCount;
 
+    @Option(names = {"--min_seq_identity"}, description = "Minimum sequence identity for MMseqs2 clustering", required = false, defaultValue = "0.9")
+    private double minSeqIdentity;
+
+    @Option(names = {"--min_coverage"}, description = "Minimum coverage for MMseqs2 clustering", required = false, defaultValue = "0.8")
+    private double minCoverage;
+
+    @Option(names = {"--cov_mode"}, description = "Coverage mode for MMseqs2 clustering", required = false, defaultValue = "0")
+    private int covMode;
+
+    @Option(names = {"--min_length"}, description = "Minimum length for single copy regions to be considered", required = false, defaultValue = "100")
+    private int minLength;
+
     private static final String CLASS_NAME = PrepareReference.class.getSimpleName();
 
     private Path genomesDir;
@@ -90,9 +102,89 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         // run KMC for each genome to do kmer counting
         runKMC(genomesMap);
 
+        // read through the fasta and kmer table and extract single copy regions
         extractSingleCopyRegions(genomesMap);
 
+        // concatenate and run mmseqs to cluster the single copy regions
+        clusterSCR(genomesMap);
+
         Logger.info(CLASS_NAME, "Reference genome preparation completed.");
+    }
+
+    private void clusterSCR(Map<String, String> genomesMap) throws IOException {
+        Logger.info(CLASS_NAME, "Clustering single copy regions using MMseqs2.");
+        String scrFasta = singleCopyDir.resolve("all_single_copy_regions.fasta").toString();
+
+        // concatenate all single copy regions into one fasta file
+        try (FastaWriter mergedFasta = new FastaWriter(scrFasta)) {
+            for (String id : genomesMap.keySet()) {
+                Path scrPath = singleCopyDir.resolve(id + ".fasta");
+                if (Files.exists(scrPath)) {
+                    try (FastaReader reader = new FastaReader(scrPath.toString())) {
+                        for (Fasta fasta : reader) {
+                            mergedFasta.write(fasta);
+                        }
+                    } catch (IOException e) {
+                        Logger.error(CLASS_NAME, "Error reading single copy region file: " + e.getMessage());
+                    }
+                } else {
+                    Logger.warning(CLASS_NAME, "Single copy region file not found for genome: " + id);
+                }
+            }
+        } catch (IOException e) {
+            Logger.error(CLASS_NAME, "Error concatenating single copy regions: " + e.getMessage());
+            return;
+        }
+
+        // createDB with mmseqs
+        String dbFile = singleCopyDir.resolve("all_single_copy_regions.db").toString();
+        StringBuilder mmseqsCreateDBCmd = new StringBuilder("mmseqs createdb ");
+        mmseqsCreateDBCmd.append(scrFasta).append(" ").append(dbFile).append(" ");
+        mmseqsCreateDBCmd.append("--threads").append(" ").append(threads).append(" ");
+        mmseqsCreateDBCmd.append("--dbtype").append(" ").append("2");
+
+        String createDBLog = singleCopyDir.resolve("mmseqs_createDB.log").toString();
+        Logger.info(CLASS_NAME, "Creating DB for mmseqs clustering. Log file: " + createDBLog);
+        Logger.info(CLASS_NAME, "MMseqs2 CMD: " + mmseqsCreateDBCmd.toString());
+        HelperFunctions.tryExec(mmseqsCreateDBCmd.toString(), createDBLog, createDBLog);
+
+        // cluster with mmseqs
+        String tmpDir = singleCopyDir.resolve("tmp").toString();
+        // if tmpDir exists delete
+        if (FileUtils.isDir(tmpDir)) {
+            FileUtils.rmdir(tmpDir);
+        } else if (FileUtils.isFile(tmpDir)) {
+            FileUtils.deleteRecursively(new File(tmpDir));
+        }
+
+        FileUtils.mkdir(tmpDir);
+        String scrClusters = singleCopyDir.resolve("clusters").toString();
+
+        StringBuilder mmseqsClusterCmd = new StringBuilder("mmseqs cluster ");
+        mmseqsClusterCmd.append(dbFile).append(" ").append(scrClusters).append(" ").append(tmpDir).append(" ");
+        mmseqsClusterCmd.append("--threads").append(" ").append(threads).append(" ");
+        mmseqsClusterCmd.append("--min-seq-id").append(" ").append(minSeqIdentity).append(" ");
+        mmseqsClusterCmd.append("-c").append(" ").append(minCoverage).append(" ");
+        mmseqsClusterCmd.append("--cov-mode").append(" ").append(covMode);
+
+        String mmseqsClusterLog = singleCopyDir.resolve("mmseqs_clustering.log").toString();
+        Logger.info(CLASS_NAME, "Clustering single copy regions with MMseqs2. Log file: " + mmseqsClusterLog);
+        Logger.info(CLASS_NAME, "MMseqs2 CMD: " + mmseqsClusterCmd.toString());
+        HelperFunctions.tryExec(mmseqsClusterCmd.toString(), mmseqsClusterLog, mmseqsClusterLog);
+
+        // convert to tsv
+        String clusterFile = singleCopyDir.resolve("clusters.tsv").toString();
+
+        StringBuilder createTSVCmd = new StringBuilder("mmseqs createtsv ");
+        createTSVCmd.append(dbFile).append(" ").append(dbFile).append(" ").append(scrClusters).append(" ").append(clusterFile).append(" ");
+        createTSVCmd.append("--threads").append(" ").append(threads);
+
+        String createTSVLog = singleCopyDir.resolve("mmseqs_clustering.log").toString();
+        Logger.info(CLASS_NAME, "Converting clustering results to TSV. Log file: " + createTSVLog);
+        Logger.info(CLASS_NAME, "MMseqs2 CMD: " + createTSVCmd.toString());
+        HelperFunctions.tryExec(createTSVCmd.toString(), createTSVLog, createTSVLog);
+
+        Logger.info(CLASS_NAME, "Clustering of single copy regions completed.");
     }
 
     private void fixGenomes(Map<String, String> genomesMap) throws IOException {
@@ -146,7 +238,7 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         for (Map.Entry<String, String> entry : genomesMap.entrySet()) {
             String id = entry.getKey();
 
-            KMC kmc = new KMC(kmcDir.resolve(id).toString());
+            KMC kmc = new KMC(kmcDir.resolve(id).toString(), false);
             FastaReader genome = new FastaReader(genomesDir.resolve(id + ".fasta").toString());
             int k = kmc.getKmerLength();
 
@@ -169,6 +261,7 @@ public class PrepareReference implements Callable<Integer>, Runnable {
                         int start = kp.getStartPos();
                         Kmer kmer = kp.getKmer();
                         int kmerCount = kmc.getCount(kmer);
+//                        int kmerCount = 1;
 
 //                        if (kmerCount == 0){
 //                            Logger.error(CLASS_NAME, "Kmer not found in KMC database for genome: " + id + ", chromosome: " + chrom.getName() + ", kmer: " + Arrays.toString(kmer.getOriginalKmer()));
@@ -187,17 +280,18 @@ public class PrepareReference implements Callable<Integer>, Runnable {
 
                         } else {
                             if (!singleCopySeq.isEmpty()) {
-                                singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + ":" + regionStart + "-" + currentEnd, singleCopySeq.toString()));
-                                if (counter == COUNTER_DUMP_SIZE) {
-                                    for (Fasta scr: singleCopyRegions) {
-                                        writer.write(scr.toFastaString(true));
+                                if (singleCopySeq.length() >= minLength) {
+                                    singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + ":" + regionStart + "-" + currentEnd, singleCopySeq.toString()));
+                                    if (counter == COUNTER_DUMP_SIZE) {
+                                        for (Fasta scr : singleCopyRegions) {
+                                            writer.write(scr.toFastaString(true));
+                                        }
+                                        singleCopyRegions.clear();
+                                        Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for genome: " + id);
                                     }
-                                    singleCopyRegions.clear();
-                                    Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for genome: " + id);
-                                    counter = 0;
+                                    counter++;
+                                    numSingleCopy++;
                                 }
-                                counter++;
-                                numSingleCopy++;
                                 singleCopySeq.setLength(0);
                             }
                             isBeginning = true;
@@ -208,19 +302,23 @@ public class PrepareReference implements Callable<Integer>, Runnable {
 
                     // ── Flush any region still open at end of chromosome ──
                     if (!singleCopySeq.isEmpty()) {
-                        singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + ":" + regionStart + "-" + currentEnd, singleCopySeq.toString()));
+                        if (singleCopySeq.length() >= minLength) {
+                            singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + ":" + regionStart + "-" + currentEnd, singleCopySeq.toString()));
+                            counter++;
+                            numSingleCopy++;
+                        }
+                        singleCopySeq.setLength(0);
+                    }
+
+                    if (!singleCopyRegions.isEmpty()) {
                         for (Fasta scr: singleCopyRegions) {
                             writer.write(scr.toFastaString(true));
                         }
-                        counter++;
-                        numSingleCopy++;
-                        singleCopySeq.setLength(0);
                     }
                     Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for genome: " + id);
                 }
-
+                writer.close();
                 kmc.close();    // once per genome, still inside try so writer flushes first
-
             } catch (IOException e) {
                 Logger.error(CLASS_NAME, "Error writing single copy regions for genome: " + id);
                 throw e;
