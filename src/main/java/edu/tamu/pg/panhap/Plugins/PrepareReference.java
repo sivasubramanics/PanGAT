@@ -238,7 +238,7 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         for (Map.Entry<String, String> entry : genomesMap.entrySet()) {
             String id = entry.getKey();
 
-            KMC kmc = new KMC(kmcDir.resolve(id).toString(), false);
+            KMC kmc = new KMC(kmcDir.resolve(id).toString(), true);
             FastaReader genome = new FastaReader(genomesDir.resolve(id + ".fasta").toString());
             int k = kmc.getKmerLength();
 
