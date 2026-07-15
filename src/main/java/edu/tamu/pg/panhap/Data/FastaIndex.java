@@ -6,6 +6,7 @@ import edu.tamu.pg.panhap.Utils.Logger;
 import java.io.*;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -22,6 +23,13 @@ public class FastaIndex implements AutoCloseable {
             'A','C','G','T','Y','R','W','S','M','K','H','B','V','D','N',
             'a','c','g','t','y','r','w','s','m','k','h','b','v','d','n'
     );
+
+    public FastaIndex(Path fastaFilePath) throws IOException {
+        this(fastaFilePath.toAbsolutePath().toString());
+    }
+    public FastaIndex(File fastaFile) throws IOException {
+        this(fastaFile.getAbsolutePath());
+    }
 
     public FastaIndex(String fastaFilePath) throws IOException {
         File fastaFile = new File(fastaFilePath);

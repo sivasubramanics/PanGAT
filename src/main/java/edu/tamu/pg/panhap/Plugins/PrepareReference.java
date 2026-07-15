@@ -1,6 +1,9 @@
 package edu.tamu.pg.panhap.Plugins;
 
 import edu.tamu.pg.panhap.Data.*;
+import edu.tamu.pg.panhap.Tasks.DependencyChecker;
+import edu.tamu.pg.panhap.Tasks.DirectoryStructure;
+import edu.tamu.pg.panhap.Tasks.PrepareData;
 import edu.tamu.pg.panhap.Utils.*;
 
 import picocli.CommandLine;
@@ -17,10 +20,10 @@ import java.util.concurrent.ExecutionException;
 public class PrepareReference implements Callable<Integer>, Runnable {
 
     @Option(names = {"-g", "--genomes"}, description = "Path to the reference genome map file (columns: id, path) in CSV format", required = true)
-    private String genomes;
+    private Path genomes;
 
     @Option(names = {"-b", "--basedir"}, description = "Base directory for the output", required = true)
-    private String baseDir;
+    private Path baseDir;
 
     @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing", required = false, defaultValue = "1")
     private int threads;
@@ -60,16 +63,16 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         }
 
         // check if necessary tools are accessible
-        checkDependencies();
+        DependencyChecker dependencyChecker = new DependencyChecker();
+        dependencyChecker.check();
 
-        // remove trailing "/" from the base_dir
-        while (baseDir.endsWith(File.separator)) {
-            baseDir = baseDir.substring(0, baseDir.length() - File.separator.length());
-        }
-        genomesDir = Paths.get(baseDir, PipelineSteps.GENOMES.dirName());
-        kmcDir = Paths.get(baseDir, PipelineSteps.KMC.dirName());
-        singleCopyDir = Paths.get(baseDir, PipelineSteps.SINGLE_COPY.dirName());
-        prepareReference();
+        // create directories under baseDir
+        DirectoryStructure dirs = new DirectoryStructure(baseDir);
+        dirs.createDirectories();
+
+        // prepareReference();
+        PrepareData data = new PrepareData(dirs, genomes, threads);
+        data.prepare();
         return 0;
     }
 
@@ -90,26 +93,26 @@ public class PrepareReference implements Callable<Integer>, Runnable {
      *      and processing each genome in parallel using the specified number of threads.
      * @throws IOException
      */
-    private void prepareReference() throws IOException {
-
-        // read genome map file
-        Map<String, String> genomesMap = readGenomesMap(genomes);
-        Logger.info(CLASS_NAME, "Read " + genomesMap.size() + " entries from genomes map file.");
-
-        // fix and copy the genomes to output dir
-        fixGenomes(genomesMap);
-
-        // run KMC for each genome to do kmer counting
-        runKMC(genomesMap);
-
-        // read through the fasta and kmer table and extract single copy regions
-        extractSingleCopyRegions(genomesMap);
-
-        // concatenate and run mmseqs to cluster the single copy regions
-        clusterSCR(genomesMap);
-
-        Logger.info(CLASS_NAME, "Reference genome preparation completed.");
-    }
+//    private void prepareReference() throws IOException {
+//
+//        // read genome map file
+//        Map<String, String> genomesMap = readGenomesMap(genomes);
+//
+//
+//        // fix and copy the genomes to output dir
+//        fixGenomes(genomesMap);
+//
+//        // run KMC for each genome to do kmer counting
+//        runKMC(genomesMap);
+//
+//        // read through the fasta and kmer table and extract single copy regions
+//        extractSingleCopyRegions(genomesMap);
+//
+//        // concatenate and run mmseqs to cluster the single copy regions
+//        clusterSCR(genomesMap);
+//
+//        Logger.info(CLASS_NAME, "Reference genome preparation completed.");
+//    }
 
     private void clusterSCR(Map<String, String> genomesMap) throws IOException {
         Logger.info(CLASS_NAME, "Clustering single copy regions using MMseqs2.");
@@ -184,51 +187,14 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         Logger.info(CLASS_NAME, "MMseqs2 CMD: " + createTSVCmd.toString());
         HelperFunctions.tryExec(createTSVCmd.toString(), createTSVLog, createTSVLog);
 
+        FileUtils.rmdir(singleCopyDir.resolve("tmp"));
         Logger.info(CLASS_NAME, "Clustering of single copy regions completed.");
     }
 
     private void fixGenomes(Map<String, String> genomesMap) throws IOException {
         // create directory structure under baseDir
         // baseDir + "/00.genomes"
-        Logger.info(CLASS_NAME, "Preparing reference genome from map file: " + genomes);
-        FileUtils.mkdir(genomesDir);
-        // read the genome fasta and rewrite into 00.genomes directory. This is mainly to fix the genome fasta in the format we can work with.
-        // sometimes the genomes fasta header might contain tabs instead of spaces, also it can be single [long] line fasta instead of multi line.
-        ExecutorService executor = Executors.newFixedThreadPool(threads);
-        List<Future<?>> futures = new ArrayList<>();
 
-        try {
-            for (Map.Entry<String, String> entry : genomesMap.entrySet()) {
-                String id = entry.getKey();
-                String genomePath = entry.getValue();
-                Path destPath = genomesDir.resolve(id + ".fasta");
-
-                futures.add(executor.submit(() -> {
-                    processGenome(destPath.toString(), genomePath);
-                    return null;
-                }));
-            }
-
-            // Wait for all tasks and propagate failures.
-            for (Future<?> future : futures) {
-                try {
-                    future.get();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException("Genome processing interrupted.", e);
-                } catch (ExecutionException e) {
-                    Throwable cause = e.getCause();
-
-                    if (cause instanceof IOException io) {
-                        throw io;
-                    }
-
-                    throw new IOException("Unexpected error while processing genomes.", cause);
-                }
-            }
-        } finally {
-            executor.shutdownNow();
-        }
     }
 
     private void extractSingleCopyRegions(Map<String, String> genomesMap) throws IOException {
@@ -318,7 +284,9 @@ public class PrepareReference implements Callable<Integer>, Runnable {
                     Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for genome: " + id);
                 }
                 writer.close();
-                kmc.close();    // once per genome, still inside try so writer flushes first
+                kmc.close();
+                FileUtils.rmdir(kmcDir.resolve(id + ".kmc_pre"));
+                FileUtils.rmdir(kmcDir.resolve(id + ".kmc_suf"));
             } catch (IOException e) {
                 Logger.error(CLASS_NAME, "Error writing single copy regions for genome: " + id);
                 throw e;
@@ -353,91 +321,9 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         FileUtils.rmdir(kmcDir.resolve("tmp"));
     }
 
-    /***
-     * Processes a genome by reading it from the given path and writing it to the destination path in a standardized format.
-     * It also creates a FASTA index for the processed genome.
-     * @param destPath
-     * @param genomePath
-     * @throws IOException
-     */
-    private static void processGenome(String destPath, String genomePath) throws IOException {
-        Logger.info(CLASS_NAME, "Processing genome: " + genomePath);
-        try (FastaWriter fw = new FastaWriter(destPath); FastaReader freader = new FastaReader(genomePath)) {
-            for (Fasta fa: freader) {
-                fw.write(fa);
-            }
-        }
-        catch (IOException e) {
-            Logger.error(CLASS_NAME, "Error copying genome: " + genomePath + " to " + destPath);
-            throw e;
-        }
-        // create fasta index for each fasta file
-        new FastaIndex(destPath);
-    }
 
-    /***
-     * Reads the genomes map file and returns a HashMap of genome IDs to their corresponding paths.
-     * @param genomesMapFile
-     * @return
-     * @throws IOException
-     */
-    private Map<String, String> readGenomesMap(String genomesMapFile) throws IOException {
-        Map<String, String> genomesMap = new HashMap<>();
-        Logger.info(CLASS_NAME, "Reading genomes map from: " + genomesMapFile);
-        try (BufferedReader reader = new BufferedReader(new FileReader(genomesMapFile))) {
 
-            // Validate header
-            String header = reader.readLine();
-            if (header == null) {
-                throw new IOException("Genomes map file is empty.");
-            }
 
-            String[] headerParts = header.split(",");
-            if (headerParts.length != 2
-                    || !headerParts[0].trim().equalsIgnoreCase("id")
-                    || !headerParts[1].trim().equalsIgnoreCase("path")) {
-
-                Logger.error(CLASS_NAME, "Invalid header in genomes map file: " + header);
-                throw new IOException("Expected header: id,path");
-            }
-
-            String line;
-            int lineNumber = 2; // First data line
-
-            while ((line = reader.readLine()) != null) {
-
-                String[] parts = line.split(",", 2);
-
-                // if the number of columns are not 2, throw an error
-                if (parts.length != 2) {
-                    Logger.error(CLASS_NAME,
-                            "Invalid line " + lineNumber + " in genomes map file: " + line);
-                    lineNumber++;
-                    continue;
-                }
-
-                String id = parts[0].trim();
-                String path = parts[1].trim();
-
-                // if id or path is empty skipt the entry
-                if (id.isEmpty() || path.isEmpty()) {
-                    Logger.warning(CLASS_NAME,
-                            "Empty ID or path on line " + lineNumber + ". Skipping entry.");
-                    lineNumber++;
-                    continue;
-                }
-
-                // if the ids are repeated, skip
-                if (genomesMap.containsKey(id)) {
-                    Logger.warning(CLASS_NAME,
-                            "Duplicate entry for ID '" + id + "' on line " + lineNumber + ". Overwriting previous value.");
-                }
-                genomesMap.put(id, path);
-                lineNumber++;
-            }
-        }
-        return genomesMap;
-    }
 
     private void checkDependencies() throws IOException {
         List<String> requiredTools = List.of(

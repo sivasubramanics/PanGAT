@@ -5,6 +5,7 @@ import edu.tamu.pg.panhap.Utils.Logger;
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
@@ -13,6 +14,10 @@ public class FastaReader implements Iterable<Fasta>, AutoCloseable {
     private FastaIterator iterator;
 
     private final String CLASS_NAME = this.getClass().getSimpleName();
+
+    public FastaReader(Path fastaPath) {
+        this(fastaPath.toString());
+    }
 
     public FastaReader(String fastaFile) {
         this.fastaFile = fastaFile;

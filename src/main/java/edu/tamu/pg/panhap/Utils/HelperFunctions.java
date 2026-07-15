@@ -308,5 +308,41 @@ public class HelperFunctions {
         Logger.info(CLASS_NAME, "==================================================");
 
     }
+
+    public static String encode(int n, int length) {
+        if (n < 0) throw new IllegalArgumentException("Negative indices not supported.");
+        if (length < 1) throw new IllegalArgumentException("Length must be >= 1.");
+
+        int base = 26;
+        char[] arr = new char[length];
+
+        for (int i = length - 1; i >= 0; i--) {
+            arr[i] = (char) ('a' + (n % base));
+            n /= base;
+        }
+
+        if (n > 0) {
+            throw new IllegalArgumentException("Number too large for length " + length);
+        }
+
+        return new String(arr);
+    }
+
+    public static int decode(String s) {
+        if (s == null || s.isEmpty()) {
+            throw new IllegalArgumentException("Input string must not be null or empty.");
+        }
+        s = s.toLowerCase();
+        int base = 26;
+        int result = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 'a' || c > 'z') {
+                throw new IllegalArgumentException("Invalid character: " + c + ". Only 'a'-'z' are allowed.");
+            }
+            result = result * base + (c - 'a');
+        }
+        return result;
+    }
 }
 // EOF

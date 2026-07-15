@@ -153,7 +153,15 @@ public class FileUtils {
         return tmpDir != null && new File(tmpDir).isDirectory();
     }
 
+    public static boolean isDir(Path path) {
+        return isDir(path.toString());
+    }
+
     public static boolean isFile(String tmpDir) {
         return tmpDir != null && new File(tmpDir).isFile();
+    }
+
+    public static boolean isFile(Path path) {
+        return isFile(path.toString());
     }
 }

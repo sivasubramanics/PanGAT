@@ -6,6 +6,7 @@ import edu.tamu.pg.panhap.Utils.Defaults;
 import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.file.Path;
 
 public class FastaWriter implements AutoCloseable {
     private final BufferedWriter writer;
@@ -26,6 +27,14 @@ public class FastaWriter implements AutoCloseable {
             Logger.error(CLASS_NAME, "Error opening file: " + fastaFile);
             throw new RuntimeException("Error opening file: " + fastaFile, e);
         }
+    }
+
+    public FastaWriter(Path fastaPath) {
+        this(fastaPath.toString(), false);
+    }
+
+    public FastaWriter(Path fastaPath, boolean append) {
+        this(fastaPath.toString(), append);
     }
 
     /**
