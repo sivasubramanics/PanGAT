@@ -88,7 +88,6 @@ public class PrepareData {
         } catch (IOException e) {
             Logger.error(CLASS_NAME, "Error writing genomes map file: " + e.getMessage());
         }
-        GenomeMap genomeMap = new GenomeMap(dirs, genomesMapFile);
     }
 
     private Map<String, Path> readGenomesFile(Path genomesFile) throws IOException {

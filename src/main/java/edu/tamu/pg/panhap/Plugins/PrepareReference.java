@@ -1,9 +1,7 @@
 package edu.tamu.pg.panhap.Plugins;
 
 import edu.tamu.pg.panhap.Data.*;
-import edu.tamu.pg.panhap.Tasks.DependencyChecker;
-import edu.tamu.pg.panhap.Tasks.DirectoryStructure;
-import edu.tamu.pg.panhap.Tasks.PrepareData;
+import edu.tamu.pg.panhap.Tasks.*;
 import edu.tamu.pg.panhap.Utils.*;
 
 import picocli.CommandLine;
@@ -11,10 +9,8 @@ import picocli.CommandLine.*;
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.ExecutionException;
 
 @Command(name = "PrepareReferences", description = "Prepare the reference genome for PanHap", sortOptions = false)
 public class PrepareReference implements Callable<Integer>, Runnable {
@@ -57,10 +53,6 @@ public class PrepareReference implements Callable<Integer>, Runnable {
 
 
     public Integer call() throws Exception {
-        // if heap size is less than 2GB, KMC won't run
-        if (HEAPSIZE < 2.2) {
-            Logger.warning(CLASS_NAME, "Max heap size is less than 2.2GB. KMC may fail due to insufficient memory.");
-        }
 
         // check if necessary tools are accessible
         DependencyChecker dependencyChecker = new DependencyChecker();
@@ -73,6 +65,26 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         // prepareReference();
         PrepareData data = new PrepareData(dirs, genomes, threads);
         data.prepare();
+
+        // load genome map from genomesMap.csv
+        GenomeMap genomeMap = new GenomeMap(dirs);
+
+        // set commandline options for KMC
+        RunKMC.KMCConfig config = RunKMC.KMCConfig.builder()
+                .threads(threads)
+                .kmerSize(kmerSize)
+                .minCount(minCount)
+                .build();
+
+        // run KMC for each genome
+        RunKMC runKMC = new RunKMC(dirs, config);
+        runKMC.run(genomeMap);
+
+        // extract single copy regions for each genome
+        ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs);
+        extractSingleCopyRegions.run(genomeMap, minCount, minLength, threads);
+
+
         return 0;
     }
 

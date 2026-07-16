@@ -16,15 +16,18 @@ import java.util.*;
  */
 public class GenomeMap {
     private final DirectoryStructure dirs;
-    private final Map<String, GenomeInfo> newIdMap = new HashMap<>();
+    private final Map<String, GenomeInfo> genomeInfoMap = new HashMap<>();
     private static final String CLASS_NAME = GenomeMap.class.getSimpleName();
-    // Add other maps if you want lookup by oldGenomeName, etc.
+    private final Path genomeFile;
+    private final List<String> genomes = new ArrayList<>();
+    // Add other maps if you want lookup by oldGenomeID, etc.
 
-    public GenomeMap(DirectoryStructure dirs, Path genomeFile) throws IOException {
+    public GenomeMap(DirectoryStructure dirs) throws IOException {
         this.dirs = dirs;
+        this.genomeFile = dirs.getBaseDir().resolve("genomesMap.csv");
         loadFromFile(genomeFile);
         Logger.info(CLASS_NAME, "Loaded genome map from file: " + genomeFile);
-        Logger.info(CLASS_NAME, "Total entries loaded: " + newIdMap.size());
+        Logger.info(CLASS_NAME, "Total entries loaded: " + genomeInfoMap.size());
     }
 
     private void loadFromFile(Path genomeFile) throws IOException {
@@ -34,35 +37,40 @@ public class GenomeMap {
                 if (line.trim().isEmpty() || line.startsWith("#")) continue;
                 String[] tokens = line.split(",");
                 if (tokens.length < 3) continue;
-                String newId = tokens[0].trim();
-                String oldGenomeName = tokens[1].trim();
-                String oldChromName = tokens[2].trim();
-                GenomeInfo info = new GenomeInfo(newId, oldGenomeName, oldChromName);
-                newIdMap.put(newId, info);
+                String newID = tokens[0].trim();
+                String genomeID = tokens[1].trim();
+                String oldID = tokens[2].trim();
+                GenomeInfo info = new GenomeInfo(newID, genomeID, oldID);
+                genomeInfoMap.put(newID, info);
+                genomes.add(genomeID);
             }
         }
     }
 
-    public GenomeInfo getByNewId(String newId) {
-        return newIdMap.get(newId);
+    public GenomeInfo getInfo(String newID) {
+        return genomeInfoMap.get(newID);
+    }
+
+    public List<String> getGenomes() {
+        return genomes;
     }
 
     // --- Static inner class holding the info ---
     public static class GenomeInfo {
-        private final String newId;         // e.g. aaabbb
-        private final String oldGenomeName; // e.g. Lakhan
-        private final String oldChromName;  // e.g. Chr01
+        private final String newID;         // e.g. aaabbb
+        private final String GenomeID; // e.g. Lakhan
+        private final String oldID;  // e.g. Chr01
 
-        public GenomeInfo(String newId, String oldGenomeName, String oldChromName) {
-            this.newId = newId;
-            this.oldGenomeName = oldGenomeName;
-            this.oldChromName = oldChromName;
+        public GenomeInfo(String newID, String genomeID, String oldID) {
+            this.newID = newID;
+            this.GenomeID = genomeID;
+            this.oldID = oldID;
         }
 
-        public String getNewId() { return newId; }
-        public String getGenomeCode() { return newId.substring(0, Defaults.CHROM_CODE_LENGTH); }
-        public String getChromCode() { return newId.substring(Defaults.CHROM_CODE_LENGTH, Defaults.CHROM_CODE_LENGTH + Defaults.CHROM_CODE_LENGTH); }
-        public String getOldGenomeName() { return oldGenomeName; }
-        public String getOldChromName() { return oldChromName; }
+        public String getNewID() { return newID; }
+        public String getGenomeCode() { return newID.substring(0, Defaults.CHROM_CODE_LENGTH); }
+        public String getChromCode() { return newID.substring(Defaults.CHROM_CODE_LENGTH, Defaults.CHROM_CODE_LENGTH + Defaults.CHROM_CODE_LENGTH); }
+        public String getGenomeID() { return GenomeID; }
+        public String getOldID() { return oldID; }
     }
-}
+}   

@@ -96,6 +96,10 @@ public class FileUtils {
         return result;
     }
 
+    public static boolean deleteRecursively(Path path) throws IOException {
+        return deleteRecursively(path.toFile());
+    }
+
     public static boolean deleteRecursively(File file) {
         try {
             Files.walkFileTree(file.toPath(), new SimpleFileVisitor<>() {
