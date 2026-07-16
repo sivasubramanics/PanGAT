@@ -44,6 +44,15 @@ public class FastaWriter implements AutoCloseable {
         this(fastaFile, false);
     }
 
+    public void write(Fasta fasta, boolean isFold){
+        if (isFold) {
+            this.write(fasta, Defaults.FASTA_FOLD_LENGTH);
+        }
+        else {
+            this.write(fasta, fasta.getSequence().length());
+        }
+    }
+
 
     public void write(Fasta fasta) {
         write(fasta, Defaults.FASTA_FOLD_LENGTH);

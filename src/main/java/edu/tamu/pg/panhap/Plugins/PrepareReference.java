@@ -84,6 +84,20 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs);
         extractSingleCopyRegions.run(genomeMap, minCount, minLength, threads);
 
+        // set commandline options for mmseqs2 clustering
+        RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()
+                .threads(threads)
+                .minSeqIdentity(minSeqIdentity)
+                .minCoverage(minCoverage)
+                .covMode(covMode)
+                .build();
+        // run MMseqs2 clustering
+        RunMMseqs runMMseqs = new RunMMseqs(dirs, mmseqsConfig);
+        runMMseqs.run(genomeMap);
+
+        PanCluster panCluster = new PanCluster(dirs);
+        panCluster.run();
+
 
         return 0;
     }

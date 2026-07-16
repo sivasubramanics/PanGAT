@@ -19,7 +19,8 @@ public class GenomeMap {
     private final Map<String, GenomeInfo> genomeInfoMap = new HashMap<>();
     private static final String CLASS_NAME = GenomeMap.class.getSimpleName();
     private final Path genomeFile;
-    private final List<String> genomes = new ArrayList<>();
+    private final Set<String> genomes = new LinkedHashSet<>();
+    private final Map<String, List<String>> genomeToChromosomes = new LinkedHashMap<>();
     // Add other maps if you want lookup by oldGenomeID, etc.
 
     public GenomeMap(DirectoryStructure dirs) throws IOException {
@@ -35,16 +36,34 @@ public class GenomeMap {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.trim().isEmpty() || line.startsWith("#")) continue;
+
                 String[] tokens = line.split(",");
                 if (tokens.length < 3) continue;
+
                 String newID = tokens[0].trim();
                 String genomeID = tokens[1].trim();
                 String oldID = tokens[2].trim();
+
                 GenomeInfo info = new GenomeInfo(newID, genomeID, oldID);
                 genomeInfoMap.put(newID, info);
-                genomes.add(genomeID);
+
+                if (!genomes.contains(genomeID)) {
+                    genomes.add(genomeID);
+                }
+
+                genomeToChromosomes
+                        .computeIfAbsent(genomeID, k -> new ArrayList<>())
+                        .add(newID);
             }
         }
+    }
+
+    public List<String> getChromosomes(String genomeID) {
+        return genomeToChromosomes.getOrDefault(genomeID, Collections.emptyList());
+    }
+
+    public Map<String, List<String>> getGenomeToChromosomes() {
+        return Collections.unmodifiableMap(genomeToChromosomes);
     }
 
     public GenomeInfo getInfo(String newID) {
@@ -52,7 +71,7 @@ public class GenomeMap {
     }
 
     public List<String> getGenomes() {
-        return genomes;
+        return new ArrayList<>(genomes);
     }
 
     // --- Static inner class holding the info ---

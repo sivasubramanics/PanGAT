@@ -102,6 +102,10 @@ public class FileUtils {
 
     public static boolean deleteRecursively(File file) {
         try {
+            // if it doesn't exist skip
+            if (!file.isDirectory() || !file.exists() || !file.canRead()) {
+                return true;
+            }
             Files.walkFileTree(file.toPath(), new SimpleFileVisitor<>() {
                 @Override
                 public FileVisitResult visitFile(Path path, BasicFileAttributes attrs) throws IOException {
@@ -167,5 +171,13 @@ public class FileUtils {
 
     public static boolean isFile(Path path) {
         return isFile(path.toString());
+    }
+
+    public static void rmFile(Path file) {
+        try {
+            Files.deleteIfExists(file);
+        } catch (IOException e) {
+            Logger.error(CLASS_NAME, "Failed to delete file: " + e.getMessage());
+        }
     }
 }

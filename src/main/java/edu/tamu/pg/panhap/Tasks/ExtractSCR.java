@@ -52,7 +52,6 @@ public class ExtractSCR {
             KMC kmc = new KMC(kmcDir.resolve(genomeID).toString(), true);
             FastaReader genome = new FastaReader(genomesDir.resolve(genomeID + ".fasta").toString());
 
-
             List<Future<?>> futures = new ArrayList<>();
 
             for (Fasta chrom : genome) {
@@ -66,22 +65,23 @@ public class ExtractSCR {
                 future.get();
             }
 
+            kmc.dumpKmerTable(kmcDir.resolve(genomeID + "_kmer_table.txt").toString());
             kmc.close();
 
             try (FastaWriter fastaWriter = new FastaWriter(singleCopyDir.resolve(genomeID + ".fasta").toString())) {
-                for (Fasta chrom : genome) {
-                    Path chromFile = singleCopyDir.resolve(chrom.getName() + ".fasta");
+                for (String chromID : genomesMap.getChromosomes(genomeID)) {
+                    Path chromFile = singleCopyDir.resolve(chromID + ".fasta");
                     if (FileUtils.isFile(chromFile)) {
                         try (FastaReader chromReader = new FastaReader(chromFile.toString())) {
                             for (Fasta scr : chromReader) {
                                 fastaWriter.write(scr);
                             }
                         } catch (IOException e) {
-                            Logger.error(CLASS_NAME, "Error reading single copy regions for chromosome " + chrom.getName() + ": " + e.getMessage());
+                            Logger.error(CLASS_NAME, "Error reading single copy regions for chromosome " + chromID + ": " + e.getMessage());
                         }
-                        FileUtils.deleteRecursively(chromFile);
+                        FileUtils.rmFile(chromFile);
                     } else {
-                        Logger.info(CLASS_NAME, "No single copy regions found for chromosome " + chrom.getName());
+                        Logger.info(CLASS_NAME, "No single copy regions found for chromosome " + chromID);
                     }
                 }
             } catch (IOException e) {
@@ -92,7 +92,7 @@ public class ExtractSCR {
 
     private void processGenome(Fasta chrom, KMC kmc, int minCount, int minLength) {
         // Larger buffer: 256KB instead of the default 8KB
-        try (BufferedWriter writer = new BufferedWriter(new FileWriter(singleCopyDir.resolve(chrom.getName() + ".fasta").toString()), 256 * 1024)) {
+        try (FastaWriter writer = new FastaWriter(singleCopyDir.resolve(chrom.getName() + ".fasta").toString(), false)) {
             int counter = 0;
             int kSize = kmc.getKmerLength();
             int prefixLength = kmc.getPrefixLength();
@@ -111,14 +111,8 @@ public class ExtractSCR {
                     KmerPosition kp = it.next();
                     int start = kp.getStartPos();
                     Kmer kmer = kp.getKmer();
-                    int kmerCount = kmc.getCount(kmer);
-//                        int kmerCount = 1;
 
-//                        if (kmerCount == 0){
-//                            Logger.error(CLASS_NAME, "Kmer not found in KMC database for genome: " + genomeID + ", chromosome: " + chrom.getName() + ", kmer: " + Arrays.toString(kmer.getOriginalKmer()));
-//                        }
-
-                    if (kmerCount > 0 && kmerCount <= minCount) {
+                    if (!kmc.isExist(kmer)){
                         if (isBeginning) {
                             regionStart = start;
                             singleCopySeq.append(kmer.getOriginalKmer());
@@ -131,10 +125,10 @@ public class ExtractSCR {
                     } else {
                         if (!singleCopySeq.isEmpty()) {
                             if (singleCopySeq.length() >= minLength) {
-                                singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + ":" + regionStart + "-" + currentEnd, singleCopySeq.toString()));
+                                singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + "" + numSingleCopy, singleCopySeq.toString(), regionStart + "-" + currentEnd));
                                 if (counter == dumpSize) {
                                     for (Fasta scr : singleCopyRegions) {
-                                        writer.write(scr.toFastaString(true));
+                                        writer.write(scr, false);
                                     }
                                     singleCopyRegions.clear();
                                     counter = 0;
@@ -147,15 +141,14 @@ public class ExtractSCR {
                         }
                         isBeginning = true;
                         regionStart = -1;
-                        it.skipTo(start + kSize);  // Skip to the next kmer position
+//                        it.skipTo(start + kSize);  // Skip to the next kmer position
                     }
                 }
 
                 // ── Flush any region still open at end of chromosome ──
                 if (!singleCopySeq.isEmpty()) {
                     if (singleCopySeq.length() >= minLength) {
-                        singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + ":" + regionStart + "-" + currentEnd, singleCopySeq.toString()));
-                        counter++;
+                        singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + "" + numSingleCopy, singleCopySeq.toString(), regionStart + "-" + currentEnd));
                         numSingleCopy++;
                     }
                     singleCopySeq.setLength(0);
@@ -163,7 +156,7 @@ public class ExtractSCR {
 
                 if (!singleCopyRegions.isEmpty()) {
                     for (Fasta scr : singleCopyRegions) {
-                        writer.write(scr.toFastaString(true));
+                        writer.write(scr, false);
                     }
                 }
                 Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for chromsome " + chrom.getName());

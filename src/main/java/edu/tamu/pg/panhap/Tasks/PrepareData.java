@@ -1,7 +1,6 @@
 package edu.tamu.pg.panhap.Tasks;
 
 import edu.tamu.pg.panhap.Data.*;
-import edu.tamu.pg.panhap.PanHap;
 import edu.tamu.pg.panhap.Utils.*;
 
 import java.io.BufferedReader;
@@ -167,7 +166,7 @@ public class PrepareData {
                 processedData.add(new String[]{newID, genomeId, fa.getName()});
                 fa.setName(newID);
                 fa.setDescription(newDescription);
-                fw.write(fa);
+                fw.write(fa, false);
                 chromNum++;
             }
         } catch (IOException e) {
