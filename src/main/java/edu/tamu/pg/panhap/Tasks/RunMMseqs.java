@@ -33,7 +33,7 @@ public class RunMMseqs {
 
         // Concatenate all single copy regions into one fasta file
         try (FastaWriter mergedFasta = new FastaWriter(scrFasta.toString())) {
-            for (String id : genomesMap.getGenomes()) {
+            for (String id : genomesMap.getOrgGenomes()) {
                 Path scrPath = singleCopyDir.resolve(id + ".fasta");
                 if (Files.exists(scrPath)) {
                     try (FastaReader reader = new FastaReader(scrPath.toString())) {
@@ -47,11 +47,13 @@ public class RunMMseqs {
                     Logger.warning(CLASS_NAME, "Single copy region file not found for genome: " + id);
                 }
             }
-            new FastaIndex(scrFasta.toString());
         } catch (IOException e) {
             Logger.error(CLASS_NAME, "Error concatenating single copy regions: " + e.getMessage());
             return;
         }
+
+        FastaIndex fastaIndex = new FastaIndex(scrFasta.toString());
+        fastaIndex.close();
 
         // CreateDB with mmseqs
         Path dbFile = singleCopyDir.resolve("all_single_copy_regions.db");

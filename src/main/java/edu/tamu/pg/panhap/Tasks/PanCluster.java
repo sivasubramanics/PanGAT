@@ -1,5 +1,10 @@
 package edu.tamu.pg.panhap.Tasks;
 
+import edu.tamu.pg.panhap.Data.Fasta;
+import edu.tamu.pg.panhap.Data.FastaIndex;
+import edu.tamu.pg.panhap.Data.FastaReader;
+import edu.tamu.pg.panhap.Data.GenomeMap;
+import edu.tamu.pg.panhap.Utils.Defaults;
 import edu.tamu.pg.panhap.Utils.PipelineSteps;
 import org.jgrapht.Graph;
 import org.jgrapht.graph.DefaultEdge;
@@ -12,95 +17,61 @@ import java.util.*;
 
 public class PanCluster {
     private final Path clustersFile;
-    private final Path faiFile;
-    private final Path outDir;
+    private final Path singleCopyDir;
+    private final Path scrFile;
 
     // Accept DirectoryStructure and retrieve file paths internally
     public PanCluster(DirectoryStructure dirs) {
-        Path singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
+        this.singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
         this.clustersFile = singleCopyDir.resolve("clusters.tsv");
-        this.faiFile = singleCopyDir.resolve("all_single_copy_regions.faidx");
-        this.outDir = singleCopyDir; // outputs go to same directory, change if needed
+        this.scrFile = singleCopyDir.resolve("all_single_copy_regions.fasta");
     }
 
     // Simple run() method (no arguments)
-    public void run() throws IOException {
-        Files.createDirectories(outDir);
+    public void run(GenomeMap genomeMap) throws IOException {
 
-        List<Edge> edges = readEdges(clustersFile);
         Graph<String, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
-        for (Edge e : edges) {
-            graph.addVertex(e.seq1);
-            graph.addVertex(e.seq2);
-            graph.addEdge(e.seq1, e.seq2);
+        try (BufferedReader br = new BufferedReader(new FileReader(clustersFile.toFile()))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] fields = line.split("\t");
+                graph.addVertex(fields[0]);
+                graph.addVertex(fields[1]);
+                if (!fields[0].equals(fields[1])) {
+                    graph.addEdge(fields[0], fields[1]);
+                }
+            }
         }
 
-        Map<String, SeqMeta> seqMeta = readFai(faiFile);
-
-        // Add singletons
-        Set<String> allSeq = new HashSet<>(seqMeta.keySet());
-        Set<String> graphSeq = graph.vertexSet();
-        for (String seq : allSeq) {
-            if (!graphSeq.contains(seq))
-                graph.addVertex(seq);
+        Map<String, SeqMeta> seqMetaMap = new HashMap<>();
+        FastaReader fastaReader = new FastaReader(scrFile);
+        for (Fasta scr : fastaReader) {
+            if (!graph.containsVertex(scr.getName())) {
+                graph.addVertex(scr.getName());
+            }
+            SeqMeta seqMeta = new SeqMeta(scr.getName(), genomeMap);
+            seqMeta.setLength(scr.getLength());
+            // description is start-end
+            int start = scr.getDescription().indexOf('-') > 0 ? Integer.parseInt(scr.getDescription().split("-")[0]) : -1;
+            int end = scr.getDescription().indexOf('-') > 0 ? Integer.parseInt(scr.getDescription().split("-")[1]) : -1;
+            seqMeta.setStart(start);
+            seqMeta.setEnd(end);
+            seqMetaMap.put(scr.getName(), seqMeta);
         }
+        fastaReader.close();
 
         ConnectivityInspector<String, DefaultEdge> inspector = new ConnectivityInspector<>(graph);
         List<Set<String>> clusters = inspector.connectedSets();
 
-        Map<String, String> seqToCluster = new HashMap<>();
-        int clusterIdx = 1;
-        for (Set<String> cluster : clusters) {
-            String clusterId = "cluster_" + clusterIdx++;
-            for (String seq : cluster)
-                seqToCluster.put(seq, clusterId);
+        int clusterID = 0;
+        for (Set<String> cluster: clusters) {
+            for (String seq: cluster) {
+                System.out.println(clusterID + " " + seqMetaMap.get(seq));
+            }
+            clusterID++;
         }
 
-        try (BufferedWriter writer = Files.newBufferedWriter(outDir.resolve("pan_cluster_all_member.txt"))) {
-            writer.write("seq\tseq.length\tgenotype\tchr\tstart\tend\tcomponents\n");
-            for (String seq : seqMeta.keySet()) {
-                SeqMeta meta = seqMeta.get(seq);
-                writer.write(String.join("\t",
-                        seq, String.valueOf(meta.length),
-                        meta.genotype, meta.chr,
-                        String.valueOf(meta.start), String.valueOf(meta.end),
-                        seqToCluster.get(seq)) + "\n");
-            }
-        }
 
-        Map<String, String> repSeq = new HashMap<>();
-        Map<String, Integer> repLen = new HashMap<>();
-        for (Set<String> cluster : clusters) {
-            String clusterId = seqToCluster.get(cluster.iterator().next());
-            String rep = null;
-            int maxLen = -1;
-            for (String seq : cluster) {
-                int len = seqMeta.get(seq).length;
-                if (len > maxLen) {
-                    rep = seq;
-                    maxLen = len;
-                }
-            }
-            repSeq.put(clusterId, rep);
-            repLen.put(clusterId, maxLen);
-        }
-
-        try (BufferedWriter writer = Files.newBufferedWriter(outDir.resolve("pan_cluster_mmseq_rep.txt"))) {
-            writer.write("components\trep\trep.length\n");
-            for (String clusterId : repSeq.keySet()) {
-                writer.write(clusterId + "\t" + repSeq.get(clusterId) + "\t" + repLen.get(clusterId) + "\n");
-            }
-        }
-
-        try (BufferedWriter writer = Files.newBufferedWriter(outDir.resolve("pan_cluster_bed_rep.txt"))) {
-            writer.write("chr\tstart\tend\trep\trep.genotype\n");
-            for (String clusterId : repSeq.keySet()) {
-                String rep = repSeq.get(clusterId);
-                SeqMeta meta = seqMeta.get(rep);
-                writer.write(String.join("\t",
-                        meta.chr, String.valueOf(meta.start), String.valueOf(meta.end), rep, meta.genotype) + "\n");
-            }
-        }
     }
 
     private static class Edge {
@@ -108,53 +79,67 @@ public class PanCluster {
         Edge(String seq1, String seq2) { this.seq1 = seq1; this.seq2 = seq2; }
     }
 
-    private static class SeqMeta {
-        String seq;
-        int length, start, end;
-        String genotype, chr;
-        SeqMeta(String seq, int length) {
-            this.seq = seq;
-            this.length = length;
-            genotype = seq.contains("|") ? seq.split("\\|")[0] : "";
-            String rest = seq.contains("|") ? seq.split("\\|")[1] : seq;
-            chr = rest.contains(":") ? rest.split(":")[0] : "";
-            String[] coords = rest.split(":");
-            if (coords.length > 1) {
-                String[] range = coords[1].split("-");
-                if (range.length == 2) {
-                    start = Integer.parseInt(range[0]);
-                    end = Integer.parseInt(range[1]);
-                }
-            }
-        }
-    }
+    /**
+     * Contains sequence metadata, parsed from sequence ID and a GenomeMap.
+     */
+    public static class SeqMeta {
+        private final String id;
+        private final String chrom;
+        private final String orgChrom;
+        private final String genome;
+        private final String orgGenome;
+        private int length = -1;
+        private int start = -1;
+        private int end = -1;
+        private boolean isForward = true;
 
-    private List<Edge> readEdges(Path clustersFile) throws IOException {
-        List<Edge> edges = new ArrayList<>();
-        try (BufferedReader reader = Files.newBufferedReader(clustersFile)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                String[] parts = line.trim().split("\t");
-                if (parts.length >= 2)
-                    edges.add(new Edge(parts[0], parts[1]));
+        /**
+         * Constructs SeqMeta from sequence ID and genomeMap.
+         * ID should have at least 2*CHROM_CODE_LENGTH characters.
+         */
+        public SeqMeta(String id, GenomeMap genomeMap) {
+            if (id == null) throw new IllegalArgumentException("ID cannot be null");
+            int chromLen = Defaults.CHROM_CODE_LENGTH;
+            if (id.length() < 2 * chromLen) {
+                throw new IllegalArgumentException("ID length is too short for expected genome/chrom extraction");
             }
-        }
-        return edges;
-    }
+            this.id = id;
+            this.genome = id.substring(0, chromLen);
+            this.chrom = id.substring(0, 2 * chromLen);
 
-    private Map<String, SeqMeta> readFai(Path faiFile) throws IOException {
-        Map<String, SeqMeta> seqMeta = new HashMap<>();
-        try (BufferedReader reader = Files.newBufferedReader(faiFile)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                String[] parts = line.trim().split("\t");
-                if (parts.length >= 2) {
-                    String seq = parts[0];
-                    int len = Integer.parseInt(parts[1]);
-                    seqMeta.put(seq, new SeqMeta(seq, len));
-                }
+            GenomeMap.GenomeInfo genomeInfo = genomeMap.getByChrom(this.chrom);
+            if (genomeInfo == null) {
+                this.orgGenome = this.genome;
+                this.orgChrom = this.chrom;
+            } else {
+                this.orgChrom = genomeInfo.getOrgChrom();
+                this.orgGenome = genomeInfo.getOrgGenome();
             }
         }
-        return seqMeta;
+
+        // --- Getters ---
+        public String getId()        { return id; }
+        public String getChrom()     { return chrom; }
+        public String getOrgChrom()  { return orgChrom; }
+        public String getGenome()    { return genome; }
+        public String getOrgGenome() { return orgGenome; }
+        public int getLength()       { return length; }
+        public int getStart()        { return start; }
+        public int getEnd()          { return end; }
+        public boolean isForward()   { return isForward; }
+
+        // --- Setters ---
+        public void setLength(int length)   { this.length = length; }
+        public void setStart(int start)     { this.start = start; }
+        public void setEnd(int end)         { this.end = end; }
+        public void setDirection(boolean isForward) { this.isForward = isForward; }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    "SeqMeta{id='%s', genome='%s', chrom='%s', orgGenome='%s', orgChrom='%s', length=%d, start=%d, end=%d, forward=%s}",
+                    id, genome, chrom, orgGenome, orgChrom, length, start, end, isForward
+            );
+        }
     }
 }

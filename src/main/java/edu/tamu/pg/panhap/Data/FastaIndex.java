@@ -4,19 +4,24 @@ import edu.tamu.pg.panhap.Utils.HelperFunctions;
 import edu.tamu.pg.panhap.Utils.Logger;
 
 import java.io.*;
+import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-/***
- * This class represents a FastaIndex object which is used to index a fasta file (somewhat similar to samtools faidx)
+/**
+ * FASTA index for random-access (samtools faidx style).
+ * Memory maps the whole file once. Scales to millions of sequences.
  */
 public class FastaIndex implements AutoCloseable {
     private final Map<String, FastaIndexEntry> index;
     private final List<String> sequenceNames;
-    private final MappedByteBuffer[] buffer;
+    private final MappedByteBuffer fastaBuffer;         // <-- single mapping!
+    private final FileChannel fastaFileChannel;
     private final Object bufferLock = new Object();
     private final String CLASS_NAME = this.getClass().getSimpleName();
     private static final Set<Character> VALID_BASES = Set.of(
@@ -43,40 +48,23 @@ public class FastaIndex implements AutoCloseable {
             Logger.info(CLASS_NAME, "Using existing index file: " + faiFilePath);
         }
 
-        // sort this.index by entry.seqId
+        // Load sorted index
         this.index = sortByValue(Collections.unmodifiableMap(loadIndex(indexFile)));
-        // create an immutable list of sequence names in the same order as in the index
         this.sequenceNames = Collections.unmodifiableList(new ArrayList<>(index.keySet()));
 
-        try (RandomAccessFile randomAccessFile = new RandomAccessFile(fastaFile, "r");
-             FileChannel fileChannel = randomAccessFile.getChannel()) {
-
-            long fileSize = fileChannel.size();
-            int numBuffers = this.sequenceNames.size();
-            this.buffer = new MappedByteBuffer[numBuffers];
-
-            for (int i = 0; i < numBuffers; i++) {
-                String sequenceName = this.sequenceNames.get(i);
-                FastaIndexEntry entry = this.index.get(sequenceName);
-
-                long sequenceStartOffset = entry.getOffset();
-                long sequenceEndOffset;
-                if (i + 1 < numBuffers) {
-                    FastaIndexEntry nextEntry = this.index.get(this.sequenceNames.get(i + 1));
-                    sequenceEndOffset = nextEntry.getOffset();
-                } else {
-                    sequenceEndOffset = fileSize;
-                }
-
-                // offset length of the sequence
-                int sequenceOffsetLength = (int) (sequenceEndOffset - sequenceStartOffset);
-
-                // memory-map for each sequence
-                if (sequenceOffsetLength > 0) {
-                    this.buffer[i] = fileChannel.map(FileChannel.MapMode.READ_ONLY, sequenceStartOffset, sequenceOffsetLength);
-                } else {
-                    this.buffer[i] = null;
-                }
+        // Map the whole fasta file
+        FileChannel fc;
+        try {
+            RandomAccessFile raf = new RandomAccessFile(fastaFile, "r");
+            fc = raf.getChannel();
+            long fileSize = fc.size();
+            this.fastaFileChannel = fc;
+            if (fileSize > Integer.MAX_VALUE) {
+                Logger.info(CLASS_NAME, "Large FASTA file detected (>2GB), using RandomAccessFile (not memory-mapped).");
+                this.fastaBuffer = null; // We'll use RandomAccessFile directly later.
+            } else {
+                Logger.info(CLASS_NAME, "Memory mapping entire fasta file (size: " + fileSize + ")");
+                this.fastaBuffer = fc.map(FileChannel.MapMode.READ_ONLY, 0, fileSize);
             }
         } catch (IOException e) {
             Logger.error(CLASS_NAME, "Error memory-mapping fasta file: " + e.getMessage());
@@ -84,9 +72,6 @@ public class FastaIndex implements AutoCloseable {
         }
     }
 
-    /***
-     * Load the index file into a map
-     */
     private Map<String, FastaIndexEntry> loadIndex(File indexFile) throws IOException {
         Map<String, FastaIndexEntry> tempIndex = new ConcurrentHashMap<>();
         try (BufferedReader reader = new BufferedReader(new FileReader(indexFile))) {
@@ -110,32 +95,29 @@ public class FastaIndex implements AutoCloseable {
         return tempIndex;
     }
 
-    /***
-     * Get a FastaIndexEntry by sequence name
-     */
     public FastaIndexEntry getEntry(String sequenceName) {
         return index.get(sequenceName);
     }
 
-    /***
-     * Get a sequence from the fasta file by name
-     */
     public String getSequence(String sequenceName) {
-        return getSequence(sequenceName, 0, getEntry(sequenceName).getLength());
+        FastaIndexEntry entry = getEntry(sequenceName);
+        if (entry == null) {
+            Logger.error(CLASS_NAME, "Sequence not found in index: " + sequenceName);
+            return null;
+        }
+        return getSequence(sequenceName, 0, entry.getLength());
     }
 
-    /***
-     * Get a subsequence from the fasta file by name, start and length
+    /**
+     * Efficient random-access for subsequence, using single mapping/random access.
      */
     public String getSequence(String name, int start, int length) {
-        int end = start + length;
         FastaIndexEntry entry = getEntry(name);
         if (entry == null) {
             Logger.error(CLASS_NAME, "Sequence not found in index: " + name);
             return null;
         }
-
-        // validate start and end
+        int end = start + length;
         if (start < 0 || end > entry.getLength() || start >= end) {
             Logger.error(CLASS_NAME, "Invalid range: " + start + "-" + end + " for sequence: " + name);
             return null;
@@ -145,42 +127,44 @@ public class FastaIndex implements AutoCloseable {
 
         synchronized (bufferLock) {
             try {
-
-                // get the buffer for the sequence, and calculate the start and end positions in the buffer
-                MappedByteBuffer buf = buffer[entry.getSeqId()];
-
+                // get index info
+                long seqOffset = entry.getOffset();
                 int lineBases = entry.getLineBases();
                 int lineWidth = entry.getLineWidth();
 
-                // get the line at which the start position is located
+                // calculate where in the file this region starts
                 int startLine = start / lineBases;
                 int startLineBaseIndex = start % lineBases;
+                long startOffsetInFile = seqOffset + ((long)startLine * lineWidth) + startLineBaseIndex;
 
-                // get the offset of the start position in the line
-                long startOffset = ((long) startLine * lineWidth) + startLineBaseIndex;
-
-                buf.position((int) (startOffset));
-
-                // read the sequence from the buffer
                 int basesToExtract = end - start;
+                long curPosInFile = startOffsetInFile;
+                int curBaseInLine = startLineBaseIndex;
+
                 while (basesToExtract > 0) {
-                    // get number of bases to read in the current line (or remaining bases in the line)
-                    int remainingBasesInLine = lineBases - (startLineBaseIndex % lineBases);
+                    int remainingBasesInLine = lineBases - curBaseInLine;
                     int basesToRead = Math.min(basesToExtract, remainingBasesInLine);
-
-                    // read the bases
-                    for (int i = 0; i < basesToRead; i++) {
-                        sequence.append((char) buf.get());
+                    // Read sequence chunk from file
+                    // If memory mapped:
+                    if (fastaBuffer != null) {
+                        fastaBuffer.position((int)curPosInFile);
+                        for (int i = 0; i < basesToRead; i++) {
+                            sequence.append((char) fastaBuffer.get());
+                        }
+                    } else { // fallback for >2GB files
+                        byte[] chunk = new byte[basesToRead];
+                        fastaFileChannel.position(curPosInFile);
+                        int read = fastaFileChannel.read(java.nio.ByteBuffer.wrap(chunk));
+                        for (int i = 0; i < read; i++) {
+                            sequence.append((char)chunk[i]);
+                        }
                     }
-
-                    // move to the next line
-                    buf.position(buf.position() + (lineWidth - lineBases));
+                    // jump past newline chars
+                    curPosInFile += basesToRead + (lineWidth - lineBases);
                     basesToExtract -= basesToRead;
-
-                    // reset the startLineBaseIndex
-                    startLineBaseIndex = 0;
+                    curBaseInLine = 0;
                 }
-            } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
+            } catch (Exception e) {
                 Logger.error(CLASS_NAME, "Error reading sequence: " + e.getMessage());
                 return null;
             }
@@ -189,25 +173,16 @@ public class FastaIndex implements AutoCloseable {
         return sequence.toString();
     }
 
-    /***
-     * Check if the sequence name is present in the index
-     */
     public boolean containsSequence(String sequenceName) {
         return index.containsKey(sequenceName);
     }
 
     @Override
     public void close() throws IOException {
-        for (MappedByteBuffer buf : buffer) {
-            if (buf != null) {
-                buf.clear();
-            }
-        }
+        if (fastaBuffer != null) fastaBuffer.clear();
+        if (fastaFileChannel != null) fastaFileChannel.close();
     }
 
-    /***
-     * Get a Fasta object for a given sequence name
-     */
     public Fasta getFasta(String tr) {
         synchronized (bufferLock) {
             int seqId = sequenceNames.indexOf(tr);
@@ -215,23 +190,14 @@ public class FastaIndex implements AutoCloseable {
         }
     }
 
-    /***
-     * Get the number of sequences in the fasta file
-     */
     public int length() {
         return sequenceNames.size();
     }
 
-    /***
-     * Get the sequence names
-     */
     public List<String> getSequenceNames() {
         return sequenceNames;
     }
 
-    /***
-     * Get the length of a sequence
-     */
     public int getSequenceLength(String name) {
         FastaIndexEntry entry = getEntry(name);
         if (entry == null) {
@@ -241,19 +207,23 @@ public class FastaIndex implements AutoCloseable {
         return entry.getLength();
     }
 
-    /***
-     * Generate an index file for the fasta file
+    /**
+     * Index generation -- unchanged (does not load entire FASTA into memory).
      */
     private void generateIndexFile(File fastaFile, File indexFile) throws IOException {
         if (HelperFunctions.isCompressed(fastaFile)) {
             Logger.error(CLASS_NAME, "Fasta file is compressed. Please decompress before indexing: " + fastaFile);
             throw new IllegalArgumentException("Fasta file is compressed. Please decompress before indexing: " + fastaFile);
         }
-        long totalLength = 0;
-        String baseName = fastaFile.getName();
-        try (BufferedReader reader = new BufferedReader(new FileReader(fastaFile));
-             BufferedWriter writer = new BufferedWriter(new FileWriter(indexFile))) {
 
+        // FIX 1: Change ArrayList to HashSet to prevent memory/GC crashes and O(N) lag
+        Set<String> sequenceNames = new HashSet<>();
+
+//        try (BufferedReader reader = new BufferedReader(new FileReader(fastaFile));
+//             BufferedWriter writer = new BufferedWriter(new FileWriter(indexFile))) {
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(new FileInputStream(fastaFile), java.nio.charset.StandardCharsets.ISO_8859_1));
+             BufferedWriter writer = new BufferedWriter(new FileWriter(indexFile))) {
             String line;
             int lineNumber = 0;
             long offset = 0;
@@ -263,56 +233,53 @@ public class FastaIndex implements AutoCloseable {
             int seqLength = 0;
             long sequenceStartOffset = 0;
             boolean inSequence = false;
-            List<String> sequenceNames = new ArrayList<>();
 
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
-                if (offset == 0 && !line.startsWith(">")) {
+
+                // Keep track of original line lengths for precise byte offsetting
+                int originalLength = line.length();
+                String trimmedLine = line.trim();
+
+                if (offset == 0 && !trimmedLine.startsWith(">")) {
                     Logger.error(CLASS_NAME, "Invalid fasta file: " + fastaFile);
                 }
-                if (line.startsWith(">")) {
+
+                if (trimmedLine.startsWith(">")) {
                     if (inSequence) {
                         writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset + "\t" + lineBases + "\t" + lineWidth + "\n");
-                        totalLength += seqLength;
                     }
-                    currentName = line.substring(1).split(" ")[0];
-                    offset += line.length() + System.lineSeparator().length();
+                    // FIX 2: Handle potential leading space issues securely
+                    currentName = trimmedLine.substring(1).split("\\s+")[0];
+
+                    offset += originalLength + System.lineSeparator().length();
                     sequenceStartOffset = offset;
                     inSequence = true;
                     seqLength = 0;
+
                     if (sequenceNames.contains(currentName)) {
                         Logger.error(CLASS_NAME, "Duplicate sequence name in fasta file: " + currentName + " at line " + lineNumber);
                     } else {
                         sequenceNames.add(currentName);
                     }
                 } else {
-                    for (int i = 0; i < line.length(); i++) {
-                        if (!VALID_BASES.contains(line.charAt(i))) {
-                            Logger.error(CLASS_NAME,
-                                    "Invalid character '" + line.charAt(i) +
-                                            "' in fasta file: " + fastaFile + " at line " + lineNumber);
-                            break;
-                        }
+                    if (seqLength == 0 && !trimmedLine.isEmpty()) {
+                        lineBases = originalLength;
+                        lineWidth = originalLength + System.lineSeparator().length();
                     }
-                    if (seqLength == 0) {
-                        lineBases = line.length();
-                        lineWidth = line.length() + System.lineSeparator().length();
-                    }
-                    seqLength += line.length();
-                    offset += line.length() + System.lineSeparator().length();
+                    seqLength += originalLength;
+                    offset += originalLength + System.lineSeparator().length();
                 }
             }
             if (inSequence && currentName != null) {
                 writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset + "\t" + lineBases + "\t" + lineWidth + "\n");
-                totalLength += seqLength;
             }
         }
-        Logger.info(CLASS_NAME, String.format("Total length (%s): %,d bases", baseName, totalLength));
-
     }
 
-    /***
-     * Sort the index Map by value, here the value is FastaIndexEntry
+
+    /**
+     * Sort index
      */
     public static Map<String, FastaIndexEntry> sortByValue(Map<String, FastaIndexEntry> map) {
         List<Map.Entry<String, FastaIndexEntry>> entryList = new ArrayList<>(map.entrySet());

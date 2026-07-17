@@ -40,7 +40,7 @@ public class RunKMC {
 
         try {
 
-            for (String id : genomeMap.getGenomes()){
+            for (String id : genomeMap.getOrgGenomes()) {
 
                 String logFile = kmcDir.resolve(id + ".kmc.log").toString();
 

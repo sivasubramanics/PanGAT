@@ -11,85 +11,140 @@ import java.nio.file.Path;
 import java.util.*;
 
 /**
- * The GenomeMap class encapsulates loading genome and chromosome mappings from a file,
- * providing easy access by new id, and keeping the GenomeInfo data structure as a static inner class.
+ * GenomeMap provides lookup for genome and chromosome codes and their original names.
+ * Supports lookup by chrom, genome, orgChrom, orgGenome, etc.
  */
 public class GenomeMap {
-    private final DirectoryStructure dirs;
-    private final Map<String, GenomeInfo> genomeInfoMap = new HashMap<>();
-    private static final String CLASS_NAME = GenomeMap.class.getSimpleName();
     private final Path genomeFile;
-    private final Set<String> genomes = new LinkedHashSet<>();
-    private final Map<String, List<String>> genomeToChromosomes = new LinkedHashMap<>();
-    // Add other maps if you want lookup by oldGenomeID, etc.
+
+    // Lookup maps
+    private final Map<String, GenomeInfo> chromToInfo = new HashMap<>(); // chrom => info
+    private final Map<String, List<GenomeInfo>> orgGenomeToInfos = new LinkedHashMap<>(); // orgGenome => info
+    private final Map<String, GenomeInfo> orgChromToInfo = new HashMap<>(); // orgChrom => info
+    private final Set<String> orgGenomes = new LinkedHashSet<>(); // keeps insertion order
 
     public GenomeMap(DirectoryStructure dirs) throws IOException {
-        this.dirs = dirs;
         this.genomeFile = dirs.getBaseDir().resolve("genomesMap.csv");
-        loadFromFile(genomeFile);
-        Logger.info(CLASS_NAME, "Loaded genome map from file: " + genomeFile);
-        Logger.info(CLASS_NAME, "Total entries loaded: " + genomeInfoMap.size());
+        loadFromFile();
+        Logger.info(getClass().getSimpleName(), "Loaded genome map from: " + genomeFile);
+        Logger.info(getClass().getSimpleName(), "Total genome entries: " + chromToInfo.size());
     }
 
-    private void loadFromFile(Path genomeFile) throws IOException {
+    private void loadFromFile() throws IOException {
         try (BufferedReader reader = Files.newBufferedReader(genomeFile)) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (line.trim().isEmpty() || line.startsWith("#")) continue;
-
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("#")) continue;
                 String[] tokens = line.split(",");
                 if (tokens.length < 3) continue;
+                String chrom = tokens[0].trim();    // aabb
+                String orgGenome = tokens[1].trim(); // Lakhan
+                String orgChrom = tokens[2].trim();   // Chr01
+                String genome = chrom.substring(0, Defaults.CHROM_CODE_LENGTH);
 
-                String newID = tokens[0].trim();
-                String genomeID = tokens[1].trim();
-                String oldID = tokens[2].trim();
+                GenomeInfo info = new GenomeInfo(chrom, orgChrom, genome, orgGenome);
 
-                GenomeInfo info = new GenomeInfo(newID, genomeID, oldID);
-                genomeInfoMap.put(newID, info);
+                chromToInfo.put(chrom, info);
+                orgGenomes.add(orgGenome);
 
-                if (!genomes.contains(genomeID)) {
-                    genomes.add(genomeID);
-                }
+                orgGenomeToInfos.computeIfAbsent(orgGenome, k -> new ArrayList<>()).add(info);
 
-                genomeToChromosomes
-                        .computeIfAbsent(genomeID, k -> new ArrayList<>())
-                        .add(newID);
+                orgChromToInfo.put(orgChrom, info); // Lookup by orgChrom name
             }
         }
     }
 
-    public List<String> getChromosomes(String genomeID) {
-        return genomeToChromosomes.getOrDefault(genomeID, Collections.emptyList());
+    /** Lookup by new chrom code (e.g. aabb) */
+    public GenomeInfo getByChrom(String chrom) {
+        return chromToInfo.get(chrom);
     }
 
-    public Map<String, List<String>> getGenomeToChromosomes() {
-        return Collections.unmodifiableMap(genomeToChromosomes);
+    /** Lookup all GenomeInfo entries for an orgGenome name (e.g. Lakhan) */
+    public List<GenomeInfo> getByOrgGenome(String orgGenome) {
+        return orgGenomeToInfos.getOrDefault(orgGenome, Collections.emptyList());
     }
 
-    public GenomeInfo getInfo(String newID) {
-        return genomeInfoMap.get(newID);
+    /** Lookup GenomeInfo by original chromosome name */
+    public GenomeInfo getByOrgChrom(String orgChrom) {
+        return orgChromToInfo.get(orgChrom);
     }
 
-    public List<String> getGenomes() {
-        return new ArrayList<>(genomes);
+    /** Get all orgGenome names (ordered) */
+    public List<String> getOrgGenomes() {
+        return new ArrayList<>(orgGenomes);
     }
 
-    // --- Static inner class holding the info ---
+    /** Get all GenomeInfo objects */
+    public List<GenomeInfo> getAllEntries() {
+        return new ArrayList<>(chromToInfo.values());
+    }
+
+    /**
+     * Returns the list of new chrom codes (e.g. aabb, aabc) for a genome code (e.g. aa) or orgGenome (e.g. Lakhan)
+     */
+    public List<String> getChroms(String genomeIdentifier) {
+        // 1. Lookup by orgGenome
+        List<GenomeInfo> infos = orgGenomeToInfos.getOrDefault(genomeIdentifier, Collections.emptyList());
+        if (!infos.isEmpty()) {
+            List<String> chroms = new ArrayList<>(infos.size());
+            for (GenomeInfo info : infos) chroms.add(info.getChrom());
+            return chroms;
+        }
+        // 2. Lookup by new genome code (e.g. aa)
+        List<String> chroms = new ArrayList<>();
+        for (GenomeInfo info : chromToInfo.values()) {
+            if (info.getGenome().equals(genomeIdentifier)) {
+                chroms.add(info.getChrom());
+            }
+        }
+        return chroms;
+    }
+
+    /**
+     * Returns the list of orgChroms (e.g. Chr01, Chr02, ...) for a genome code (e.g. aa) or orgGenome (e.g. Lakhan)
+     */
+    public List<String> getOrgChroms(String genomeIdentifier) {
+        // 1. Lookup by orgGenome
+        List<GenomeInfo> infos = orgGenomeToInfos.getOrDefault(genomeIdentifier, Collections.emptyList());
+        if (!infos.isEmpty()) {
+            List<String> orgChroms = new ArrayList<>(infos.size());
+            for (GenomeInfo info : infos) orgChroms.add(info.getOrgChrom());
+            return orgChroms;
+        }
+        // 2. Lookup by new genome code (e.g. aa)
+        List<String> orgChroms = new ArrayList<>();
+        for (GenomeInfo info : chromToInfo.values()) {
+            if (info.getGenome().equals(genomeIdentifier)) {
+                orgChroms.add(info.getOrgChrom());
+            }
+        }
+        return orgChroms;
+    }
+
+    // --- Static inner data class ---
     public static class GenomeInfo {
-        private final String newID;         // e.g. aaabbb
-        private final String GenomeID; // e.g. Lakhan
-        private final String oldID;  // e.g. Chr01
+        private final String chrom;       // new chrom code, e.g. aabb
+        private final String orgChrom;    // original chrom name, e.g. Chr01
+        private final String genome;      // new genome code, e.g. aa
+        private final String orgGenome;   // original genome name, e.g. Lakhan
 
-        public GenomeInfo(String newID, String genomeID, String oldID) {
-            this.newID = newID;
-            this.GenomeID = genomeID;
-            this.oldID = oldID;
+        public GenomeInfo(String chrom, String orgChrom, String genome, String orgGenome) {
+            this.chrom = chrom;
+            this.orgChrom = orgChrom;
+            this.genome = genome;
+            this.orgGenome = orgGenome;
         }
 
-        public String getNewID() { return newID; }
-        public String getGenomeCode() { return newID.substring(0, Defaults.CHROM_CODE_LENGTH); }
-        public String getChromCode() { return newID.substring(Defaults.CHROM_CODE_LENGTH, Defaults.CHROM_CODE_LENGTH + Defaults.CHROM_CODE_LENGTH); }
-        public String getGenomeID() { return GenomeID; }
-        public String getOldID() { return oldID; }
+        public String getChrom()      { return chrom; }
+        public String getOrgChrom()   { return orgChrom; }
+        public String getGenome()     { return genome; }
+        public String getOrgGenome()  { return orgGenome; }
+
+        @Override
+        public String toString() {
+            return String.format("GenomeInfo{chrom='%s', orgChrom='%s', genome='%s', orgGenome='%s'}",
+                    chrom, orgChrom, genome, orgGenome);
+        }
     }
-}   
+}

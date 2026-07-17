@@ -47,7 +47,7 @@ public class ExtractSCR {
 
         ExecutorService executor = Executors.newFixedThreadPool(nThreads);
 
-        for (String genomeID : genomesMap.getGenomes()) {
+        for (String genomeID : genomesMap.getOrgGenomes()) {
 
             KMC kmc = new KMC(kmcDir.resolve(genomeID).toString(), true);
             FastaReader genome = new FastaReader(genomesDir.resolve(genomeID + ".fasta").toString());
@@ -69,7 +69,7 @@ public class ExtractSCR {
             kmc.close();
 
             try (FastaWriter fastaWriter = new FastaWriter(singleCopyDir.resolve(genomeID + ".fasta").toString())) {
-                for (String chromID : genomesMap.getChromosomes(genomeID)) {
+                for (String chromID : genomesMap.getChroms(genomeID)) {
                     Path chromFile = singleCopyDir.resolve(chromID + ".fasta");
                     if (FileUtils.isFile(chromFile)) {
                         try (FastaReader chromReader = new FastaReader(chromFile.toString())) {
