@@ -65,7 +65,7 @@ public class ExtractSCR {
                 future.get();
             }
 
-            kmc.dumpKmerTable(kmcDir.resolve(genomeID + "_kmer_table.txt").toString());
+//            kmc.dumpKmerTable(kmcDir.resolve(genomeID + "_kmer_table.txt").toString());
             kmc.close();
 
             try (FastaWriter fastaWriter = new FastaWriter(singleCopyDir.resolve(genomeID + ".fasta").toString())) {

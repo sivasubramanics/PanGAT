@@ -135,6 +135,9 @@ public class RunKMC {
             }
 
             public Builder minCount(int value) {
+                if (value < 2) {
+                    Logger.error(CLASS_NAME, "Min count must be at least 2.");
+                }
                 this.minCount = value;
                 return this;
             }
