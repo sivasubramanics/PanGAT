@@ -78,13 +78,15 @@ public class FastaIndex implements AutoCloseable {
             String line;
             int seqId = 0;
             while ((line = reader.readLine()) != null) {
-                String[] fields = line.split("\t");
+                String[] fields = line.split("\t", 6); // allow description to contain tabs
+                String desc = (fields.length >= 6 && !fields[5].isEmpty()) ? fields[5] : null;
                 FastaIndexEntry entry = new FastaIndexEntry(seqId,
                         fields[0],
                         Integer.parseInt(fields[1]),
                         Long.parseLong(fields[2]),
                         Integer.parseInt(fields[3]),
-                        Integer.parseInt(fields[4])
+                        Integer.parseInt(fields[4]),
+                        desc
                 );
                 seqId++;
                 if (tempIndex.putIfAbsent(entry.getSequenceName(), entry) != null) {
@@ -186,7 +188,10 @@ public class FastaIndex implements AutoCloseable {
     public Fasta getFasta(String tr) {
         synchronized (bufferLock) {
             int seqId = sequenceNames.indexOf(tr);
-            return new Fasta(seqId, tr, getSequence(tr));
+            FastaIndexEntry entry = getEntry(tr);
+            if (entry == null) return null;
+            String desc = entry.getDescription();
+            return new Fasta(seqId, tr, getSequence(tr), desc);
         }
     }
 
@@ -215,12 +220,7 @@ public class FastaIndex implements AutoCloseable {
             Logger.error(CLASS_NAME, "Fasta file is compressed. Please decompress before indexing: " + fastaFile);
             throw new IllegalArgumentException("Fasta file is compressed. Please decompress before indexing: " + fastaFile);
         }
-
-        // FIX 1: Change ArrayList to HashSet to prevent memory/GC crashes and O(N) lag
         Set<String> sequenceNames = new HashSet<>();
-
-//        try (BufferedReader reader = new BufferedReader(new FileReader(fastaFile));
-//             BufferedWriter writer = new BufferedWriter(new FileWriter(indexFile))) {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(new FileInputStream(fastaFile), java.nio.charset.StandardCharsets.ISO_8859_1));
              BufferedWriter writer = new BufferedWriter(new FileWriter(indexFile))) {
@@ -228,35 +228,38 @@ public class FastaIndex implements AutoCloseable {
             int lineNumber = 0;
             long offset = 0;
             String currentName = null;
+            String currentDesc = null;
             int lineBases = 0;
             int lineWidth = 0;
             int seqLength = 0;
             long sequenceStartOffset = 0;
             boolean inSequence = false;
-
             while ((line = reader.readLine()) != null) {
                 lineNumber++;
-
-                // Keep track of original line lengths for precise byte offsetting
                 int originalLength = line.length();
                 String trimmedLine = line.trim();
-
                 if (offset == 0 && !trimmedLine.startsWith(">")) {
                     Logger.error(CLASS_NAME, "Invalid fasta file: " + fastaFile);
                 }
-
                 if (trimmedLine.startsWith(">")) {
+                    // WRITE previous record if any
                     if (inSequence) {
-                        writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset + "\t" + lineBases + "\t" + lineWidth + "\n");
+                        if (currentDesc != null && !currentDesc.isEmpty()) {
+                            writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset
+                                    + "\t" + lineBases + "\t" + lineWidth + "\t" + currentDesc + "\n");
+                        } else {
+                            writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset
+                                    + "\t" + lineBases + "\t" + lineWidth + "\n");
+                        }
                     }
-                    // FIX 2: Handle potential leading space issues securely
-                    currentName = trimmedLine.substring(1).split("\\s+")[0];
-
+                    // Extract name & desc robustly
+                    String[] tokens = trimmedLine.substring(1).split("\\s+", 2);
+                    currentName = tokens[0];
+                    currentDesc = (tokens.length > 1) ? tokens[1] : null;
                     offset += originalLength + System.lineSeparator().length();
                     sequenceStartOffset = offset;
                     inSequence = true;
                     seqLength = 0;
-
                     if (sequenceNames.contains(currentName)) {
                         Logger.error(CLASS_NAME, "Duplicate sequence name in fasta file: " + currentName + " at line " + lineNumber);
                     } else {
@@ -271,8 +274,15 @@ public class FastaIndex implements AutoCloseable {
                     offset += originalLength + System.lineSeparator().length();
                 }
             }
+            // Final record
             if (inSequence && currentName != null) {
-                writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset + "\t" + lineBases + "\t" + lineWidth + "\n");
+                if (currentDesc != null && !currentDesc.isEmpty()) {
+                    writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset
+                            + "\t" + lineBases + "\t" + lineWidth + "\t" + currentDesc + "\n");
+                } else {
+                    writer.write(currentName + "\t" + seqLength + "\t" + sequenceStartOffset
+                            + "\t" + lineBases + "\t" + lineWidth + "\n");
+                }
             }
         }
     }

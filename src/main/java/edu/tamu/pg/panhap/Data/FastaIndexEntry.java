@@ -13,14 +13,20 @@ public class FastaIndexEntry implements Comparable<FastaIndexEntry> {
     private final int lineBases;
     private final int lineWidth;
     private final int seqId;
+    private String description;
 
-    public FastaIndexEntry(int seqId, String sequenceName, int length, long offset, int lineBases, int lineWidth) {
+    public FastaIndexEntry(int seqId, String sequenceName, int length, long offset, int lineBases, int lineWidth, String description) {
         this.seqId = seqId;
         this.sequenceName = sequenceName;
         this.offset = offset;
         this.length = length;
         this.lineBases = lineBases;
         this.lineWidth = lineWidth;
+        this.description = description;
+    }
+
+    public FastaIndexEntry(int id, String name, int length, long offset, int lineBases, int lineWidth) {
+        this(id, name, length, offset, lineBases, lineWidth, null); // Default: description = null
     }
 
     public String getSequenceName() {
@@ -42,6 +48,9 @@ public class FastaIndexEntry implements Comparable<FastaIndexEntry> {
     public int getLineWidth() {
         return lineWidth;
     }
+
+    public void setDescription(String desc) { this.description = desc; }
+    public String getDescription() { return description; }
 
     @Override
     public String toString() {
