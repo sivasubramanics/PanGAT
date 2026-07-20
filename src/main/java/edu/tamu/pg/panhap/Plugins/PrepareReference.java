@@ -65,10 +65,10 @@ public class PrepareReference implements Callable<Integer>, Runnable {
 //        // prepareReference();
 //        PrepareData data = new PrepareData(dirs, genomes, threads);
 //        data.prepare();
-
+//
         // load genome map from genomesMap.csv
         GenomeMap genomeMap = new GenomeMap(dirs);
-
+//
 //        // set commandline options for KMC
 //        RunKMC.KMCConfig config = RunKMC.KMCConfig.builder()
 //                .threads(threads)

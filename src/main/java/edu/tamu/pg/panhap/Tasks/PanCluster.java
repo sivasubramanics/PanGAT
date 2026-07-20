@@ -27,7 +27,6 @@ public class PanCluster {
         this.scrFile = singleCopyDir.resolve("all_single_copy_regions.fasta");
     }
 
-    // Simple run() method (no arguments)
     public void run(GenomeMap genomeMap) throws IOException {
 
         Graph<String, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
@@ -64,25 +63,34 @@ public class PanCluster {
         List<Set<String>> clusters = inspector.connectedSets();
 
         int clusterID = 0;
+        Map<String, List<SeqMeta>> clusterMap = new LinkedHashMap<>();
         for (Set<String> cluster: clusters) {
+            Set<SeqMeta> seqMetas = new HashSet<>();
             for (String seq: cluster) {
-                System.out.println(clusterID + " " + seqMetaMap.get(seq));
+                seqMetas.add(seqMetaMap.get(seq));
             }
+            // sort seqMetas
+            List<SeqMeta> sortedSeqMetas = new ArrayList<>(seqMetas);
+
+            // descending by length
+            sortedSeqMetas.sort(Comparator.comparingInt(SeqMeta::getLength).reversed());
+
+            clusterMap.put("cluster_" + clusterID, sortedSeqMetas);
             clusterID++;
         }
 
+        for (String clusterName: clusterMap.keySet()) {
+            for (SeqMeta seqMeta: clusterMap.get(clusterName)) {
+                System.out.println(clusterName + " : " + seqMeta.toString());
+            }
+        }
 
-    }
-
-    private static class Edge {
-        String seq1, seq2;
-        Edge(String seq1, String seq2) { this.seq1 = seq1; this.seq2 = seq2; }
     }
 
     /**
      * Contains sequence metadata, parsed from sequence ID and a GenomeMap.
      */
-    public static class SeqMeta {
+    public static class SeqMeta implements Comparable<SeqMeta> {
         private final String id;
         private final String chrom;
         private final String orgChrom;
@@ -140,6 +148,12 @@ public class PanCluster {
                     "SeqMeta{id='%s', genome='%s', chrom='%s', orgGenome='%s', orgChrom='%s', length=%d, start=%d, end=%d, forward=%s}",
                     id, genome, chrom, orgGenome, orgChrom, length, start, end, isForward
             );
+        }
+
+        @Override
+        public int compareTo(SeqMeta o) {
+            // sort based on length
+            return Integer.compare(this.length, o.length);
         }
     }
 }
