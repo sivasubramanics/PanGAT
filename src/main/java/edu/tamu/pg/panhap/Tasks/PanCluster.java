@@ -1,10 +1,9 @@
 package edu.tamu.pg.panhap.Tasks;
 
-import edu.tamu.pg.panhap.Data.Fasta;
-import edu.tamu.pg.panhap.Data.FastaIndex;
-import edu.tamu.pg.panhap.Data.FastaReader;
-import edu.tamu.pg.panhap.Data.GenomeMap;
+import edu.tamu.pg.panhap.Data.*;
 import edu.tamu.pg.panhap.Utils.Defaults;
+import edu.tamu.pg.panhap.Utils.HelperFunctions;
+import edu.tamu.pg.panhap.Utils.Logger;
 import edu.tamu.pg.panhap.Utils.PipelineSteps;
 import org.jgrapht.Graph;
 import org.jgrapht.graph.DefaultEdge;
@@ -14,17 +13,27 @@ import org.jgrapht.alg.connectivity.ConnectivityInspector;
 import java.nio.file.*;
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 public class PanCluster {
     private final Path clustersFile;
     private final Path singleCopyDir;
     private final Path scrFile;
+    private int nThreads;
+    private final String CLASS_NAME = PanCluster.class.getSimpleName();
 
     // Accept DirectoryStructure and retrieve file paths internally
     public PanCluster(DirectoryStructure dirs) {
         this.singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
         this.clustersFile = singleCopyDir.resolve("clusters.tsv");
         this.scrFile = singleCopyDir.resolve("all_single_copy_regions.fasta");
+        this.nThreads = 2;
+    }
+
+    public PanCluster(DirectoryStructure dirs, int nThreads) {
+        this(dirs);
+        this.nThreads = nThreads;
     }
 
     public void run(GenomeMap genomeMap) throws IOException {
@@ -43,48 +52,154 @@ public class PanCluster {
         }
 
         Map<String, SeqMeta> seqMetaMap = new HashMap<>();
-        FastaReader fastaReader = new FastaReader(scrFile);
-        for (Fasta scr : fastaReader) {
-            if (!graph.containsVertex(scr.getName())) {
-                graph.addVertex(scr.getName());
+        FastaIndex fastaIndex = new FastaIndex(scrFile);
+
+        for (String seqName : fastaIndex.getSequenceNames()) {
+            if (!graph.containsVertex(seqName)) {
+                graph.addVertex(seqName);
             }
-            SeqMeta seqMeta = new SeqMeta(scr.getName(), genomeMap);
-            seqMeta.setLength(scr.getLength());
-            // description is start-end
-            int start = scr.getDescription().indexOf('-') > 0 ? Integer.parseInt(scr.getDescription().split("-")[0]) : -1;
-            int end = scr.getDescription().indexOf('-') > 0 ? Integer.parseInt(scr.getDescription().split("-")[1]) : -1;
+            FastaIndexEntry entry = fastaIndex.getEntry(seqName);
+            SeqMeta seqMeta = new SeqMeta(seqName, genomeMap);
+            seqMeta.setLength(entry.getLength());
+
+            String desc = entry.getDescription();
+            int start = -1, end = -1;
+            if (desc != null && desc.contains("-")) {
+                String[] parts = desc.trim().split("-");
+                try {
+                    start = Integer.parseInt(parts[0]);
+                    end = Integer.parseInt(parts[1]);
+                } catch (Exception e) {
+                    start = end = -1;
+                }
+            }
             seqMeta.setStart(start);
             seqMeta.setEnd(end);
-            seqMetaMap.put(scr.getName(), seqMeta);
+
+            seqMetaMap.put(seqName, seqMeta);
         }
-        fastaReader.close();
 
         ConnectivityInspector<String, DefaultEdge> inspector = new ConnectivityInspector<>(graph);
-        List<Set<String>> clusters = inspector.connectedSets();
+        List<Set<String>> graphClusters = inspector.connectedSets();
 
-        int clusterID = 0;
-        Map<String, List<SeqMeta>> clusterMap = new LinkedHashMap<>();
-        for (Set<String> cluster: clusters) {
-            Set<SeqMeta> seqMetas = new HashSet<>();
-            for (String seq: cluster) {
-                seqMetas.add(seqMetaMap.get(seq));
-            }
-            // sort seqMetas
-            List<SeqMeta> sortedSeqMetas = new ArrayList<>(seqMetas);
-
-            // descending by length
-            sortedSeqMetas.sort(Comparator.comparingInt(SeqMeta::getLength).reversed());
-
-            clusterMap.put("cluster_" + clusterID, sortedSeqMetas);
-            clusterID++;
+        List<Cluster> clusters = new ArrayList<>();
+        int idx = 0;
+        for (Set<String> clusterSeqIds : graphClusters) {
+            List<SeqMeta> memberSeqs = clusterSeqIds.stream()
+                    .map(seqMetaMap::get)
+                    .collect(Collectors.toList());
+            clusters.add(new Cluster("clstr" + idx, memberSeqs));
+            idx++;
         }
 
-        for (String clusterName: clusterMap.keySet()) {
-            for (SeqMeta seqMeta: clusterMap.get(clusterName)) {
-                System.out.println(clusterName + " : " + seqMeta.toString());
+        Path repOut = singleCopyDir.resolve("pan_clusters_rep.tsv");
+        Path membOut = singleCopyDir.resolve("pan_clusters_members.tsv");
+        Path bedOut = singleCopyDir.resolve("pan_clusters.bed");
+
+        try (
+                BufferedWriter repBw = Files.newBufferedWriter(repOut);
+                BufferedWriter membBw = Files.newBufferedWriter(membOut);
+                BufferedWriter bedBw = Files.newBufferedWriter(bedOut)
+        ) {
+            // 1. Rep header
+            repBw.write(String.join(Defaults.FIELD_SEPERATOR,
+                    "clusterId",
+                    "repId",
+                    "genome",
+                    "chrom",
+                    "orgGenome",
+                    "orgChrom",
+                    "length",
+                    "start",
+                    "end",
+                    "size",
+                    "ngenotypes",
+                    "minLength",
+                    "maxLength",
+                    "meanLength",
+                    "sdLength",
+                    "cvLength",
+                    "mainChrom",
+                    "mainChromFrac",
+                    "nChroms"));
+            repBw.newLine();
+
+            // 2. Members header
+            membBw.write(String.join(Defaults.FIELD_SEPERATOR,
+                    "clusterId",
+                    "seqId",
+                    "genome",
+                    "chrom",
+                    "orgGenome",
+                    "orgChrom",
+                    "length",
+                    "start",
+                    "end"));
+            membBw.newLine();
+
+            // 3. Loop clusters
+            for (Cluster c : clusters) {
+                // Write rep
+                repBw.write(c.repSummaryTSV());
+                repBw.newLine();
+
+                // Write members
+                for (String line : c.membersSummaryTSV()) {
+                    membBw.write(line);
+                    membBw.newLine();
+                }
+
+                // Write BED for rep
+                bedBw.write(c.repBEDLine());
+                bedBw.newLine();
             }
         }
 
+        SortBED sorter = new SortBED(bedOut);
+        sorter.sort(nThreads);
+
+        // Read BED sequence IDs (preserve order, and set for quick lookup)
+        List<String> panScrIDs = new ArrayList<>();
+        Set<String> panScrSet = new HashSet<>();
+        try (BufferedReader br = new BufferedReader(new FileReader(bedOut.toFile()))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                String[] fields = line.split("\t");
+                if (fields.length < 4) continue;
+                String seqId = fields[3];
+                panScrIDs.add(seqId);
+                panScrSet.add(seqId);
+            }
+        }
+
+
+        Map<String, Fasta> fastaMap = new HashMap<>();
+        try (FastaReader scrReader = new FastaReader(scrFile)) {
+            for (Fasta scr : scrReader) {
+                if (panScrSet.contains(scr.getName())) {
+                    fastaMap.put(scr.getName(), scr);
+                }
+            }
+        }
+
+        try (FastaWriter fastaWriter = new FastaWriter(singleCopyDir.resolve("pan_clusters.fasta").toString())) {
+            for (String seqId : panScrIDs) {
+                Fasta scr = fastaMap.get(seqId);
+                if (scr != null) {
+                    fastaWriter.write(scr);
+                } else {
+                    Logger.error(CLASS_NAME, "Sequence not found in fasta file: " + seqId);
+                }
+            }
+        }
+
+        RunKMC.KMCConfig config = RunKMC.KMCConfig.builder()
+                .threads(nThreads)
+                .kmerSize(51)
+                .minCount(1)
+                .build();
+        RunKMC runKMC = new RunKMC(config);
+        runKMC.run(singleCopyDir.resolve("pan_clusters.fasta"), singleCopyDir.resolve("pan_clusters"));
     }
 
     /**
@@ -128,6 +243,7 @@ public class PanCluster {
         // --- Getters ---
         public String getId()        { return id; }
         public String getChrom()     { return chrom; }
+        public String getChromCode() { return chrom.substring(Defaults.CHROM_CODE_LENGTH); }
         public String getOrgChrom()  { return orgChrom; }
         public String getGenome()    { return genome; }
         public String getOrgGenome() { return orgGenome; }
@@ -142,6 +258,18 @@ public class PanCluster {
         public void setEnd(int end)         { this.end = end; }
         public void setDirection(boolean isForward) { this.isForward = isForward; }
 
+        public String toTSV(boolean isStrand) {
+            if (isStrand) {
+                return String.format("%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s",
+                        id, genome, chrom, orgGenome, orgChrom, length, start, end, isForward
+                );
+            } else {
+                return String.format("%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d",
+                        id, genome, chrom, orgGenome, orgChrom, length, start, end
+                );
+            }
+        }
+
         @Override
         public String toString() {
             return String.format(
@@ -154,6 +282,158 @@ public class PanCluster {
         public int compareTo(SeqMeta o) {
             // sort based on length
             return Integer.compare(this.length, o.length);
+        }
+    }
+
+    public class Cluster {
+        // Fields
+        private final String clusterId;
+        private final List<SeqMeta> members;  // All member sequences (sorted by length descending)
+        private final SeqMeta rep;            // Longest sequence
+        private final int size;
+        private final int ngenotypes;
+        private final int minLength;
+        private final int maxLength;
+        private final double meanLength;
+        private final double sdLength;
+        private final double cvLength;
+        private final String mainChrom;       // Most common chromosome (excluding "chrUn")
+        private final double mainChromFraction;
+        private final int nChroms;            // Number of unique chromosomes (excluding "chrUn")
+        private final Map<String, List<SeqMeta>> membersByGenotype;  // genotype -> list of SeqMeta
+
+        // Constructor
+        public Cluster(String clusterId, List<SeqMeta> members) {
+            this.clusterId = clusterId;
+            if (members == null || members.isEmpty())
+                throw new IllegalArgumentException("Cluster must have at least one member");
+            // Defensive copy and sort by descending length
+            this.members = new ArrayList<>(members);
+            this.members.sort(Comparator.comparingInt(SeqMeta::getLength).reversed());
+            this.rep = this.members.get(0);
+            this.size = this.members.size();
+
+            // Unique genotypes
+            Set<String> genotypes = this.members.stream()
+                    .map(SeqMeta::getGenome)
+                    .collect(Collectors.toSet());
+            this.ngenotypes = genotypes.size();
+
+            // Length statistics
+            List<Integer> lengths = this.members.stream()
+                    .map(SeqMeta::getLength)
+                    .collect(Collectors.toList());
+            this.minLength = Collections.min(lengths);
+            this.maxLength = Collections.max(lengths);
+            this.meanLength = lengths.stream().mapToInt(i -> i).average().orElse(0);
+            // Calculate standard deviation
+            double mean = this.meanLength;
+            this.sdLength = Math.sqrt(
+                    lengths.stream()
+                            .mapToDouble(l -> Math.pow(l - mean, 2))
+                            .average().orElse(0)
+            );
+            this.cvLength = mean == 0 ? 0 : this.sdLength / mean;
+
+            // Chromosome stats (ignore "chrUn")
+            Map<String, Integer> chromCounts = new HashMap<>();
+            int chromValidTotal = 0;
+            for (SeqMeta seq : this.members) {
+                String chrom = seq.getChrom();
+                if (chrom != null && !chrom.equals("chrUn")) {
+                    chromCounts.put(chrom, chromCounts.getOrDefault(chrom, 0) + 1);
+                    chromValidTotal++;
+                }
+            }
+            String majorChrom = "NA";
+            int maxCount = 0;
+            for (Map.Entry<String, Integer> entry : chromCounts.entrySet()) {
+                if (entry.getValue() > maxCount) {
+                    maxCount = entry.getValue();
+                    majorChrom = entry.getKey();
+                }
+            }
+            this.mainChrom = majorChrom;
+            this.nChroms = chromCounts.size();
+            this.mainChromFraction = chromValidTotal == 0 ? 0 : ((double) maxCount) / chromValidTotal;
+
+            // Per-genotype lists
+            Map<String, List<SeqMeta>> byGeno = new HashMap<>();
+            for (SeqMeta seq : this.members) {
+                String geno = seq.getGenome();
+                byGeno.computeIfAbsent(geno, k -> new ArrayList<>()).add(seq);
+            }
+            this.membersByGenotype = Collections.unmodifiableMap(byGeno);
+        }
+
+        // --- Getters ---
+        public String getClusterId()               { return clusterId; }
+        public List<SeqMeta> getMembers()          { return Collections.unmodifiableList(members); }
+        public SeqMeta getRep()                    { return rep; }
+        public int getSize()                       { return size; }
+        public int getNgenotypes()                 { return ngenotypes; }
+        public int getMinLength()                  { return minLength; }
+        public int getMaxLength()                  { return maxLength; }
+        public double getMeanLength()              { return meanLength; }
+        public double getSdLength()                { return sdLength; }
+        public double getCvLength()                { return cvLength; }
+        public String getMainChrom()               { return mainChrom; }
+        public double getMainChromFraction()       { return mainChromFraction; }
+        public int getNChroms()                    { return nChroms; }
+        public Map<String, List<SeqMeta>> getMembersByGenotype() { return membersByGenotype; }
+
+        public String repSummaryTSV() {
+            SeqMeta r = getRep();
+            return String.join("\t",
+                    clusterId,
+                    r.getId(),
+                    r.getGenome(),
+                    r.getChrom(),
+                    r.getOrgGenome(),
+                    r.getOrgChrom(),
+                    Integer.toString(r.getLength()),
+                    Integer.toString(r.getStart()),
+                    Integer.toString(r.getEnd()),
+                    Integer.toString(getSize()),
+                    Integer.toString(getNgenotypes()),
+                    Integer.toString(getMinLength()),
+                    Integer.toString(getMaxLength()),
+                    HelperFunctions.floatFormat(getMeanLength()),
+                    HelperFunctions.floatFormat(getSdLength()),
+                    HelperFunctions.floatFormat(getCvLength()),
+                    getMainChrom(),
+                    HelperFunctions.floatFormat(getMainChromFraction()),
+                    Integer.toString(getNChroms())
+            );
+        }
+
+        public List<String> membersSummaryTSV() {
+            List<String> lines = new ArrayList<>();
+            for (SeqMeta m : getMembers()) {
+                lines.add(String.join("\t",
+                        clusterId,
+                        m.getId(),
+                        m.getGenome(),
+                        m.getChrom(),
+                        m.getOrgGenome(),
+                        m.getOrgChrom(),
+                        Integer.toString(m.getLength()),
+                        Integer.toString(m.getStart()),
+                        Integer.toString(m.getEnd())
+                ));
+            }
+            return lines;
+        }
+
+        public String repBEDLine() {
+            SeqMeta r = getRep();
+            // BED: chrom, start-1 (0-based BED), end, name
+            return String.join("\t",
+                    r.getChromCode(),
+                    Integer.toString(Math.max(0, r.getStart() - 1)),   // start in BED is 0-based
+                    Integer.toString(r.getEnd()),
+                    r.getId()
+            );
         }
     }
 }

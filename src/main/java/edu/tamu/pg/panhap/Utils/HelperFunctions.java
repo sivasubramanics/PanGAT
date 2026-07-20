@@ -344,5 +344,9 @@ public class HelperFunctions {
         }
         return result;
     }
+
+    public static String floatFormat(double v) {
+        return String.format("%." + Defaults.FLOAT_DIGITS + "f", v);
+    }
 }
 // EOF

@@ -62,29 +62,29 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         DirectoryStructure dirs = new DirectoryStructure(baseDir);
         dirs.createDirectories();
 
-//        // prepareReference();
+        // prepareReference();
 //        PrepareData data = new PrepareData(dirs, genomes, threads);
 //        data.prepare();
-//
+
         // load genome map from genomesMap.csv
         GenomeMap genomeMap = new GenomeMap(dirs);
-//
-//        // set commandline options for KMC
+
+        // set commandline options for KMC
 //        RunKMC.KMCConfig config = RunKMC.KMCConfig.builder()
 //                .threads(threads)
 //                .kmerSize(kmerSize)
 //                .minCount(minCount)
 //                .build();
-//
-//        // run KMC for each genome
+
+        // run KMC for each genome
 //        RunKMC runKMC = new RunKMC(dirs, config);
 //        runKMC.run(genomeMap);
-//
-//        // extract single copy regions for each genome
+
+        // extract single copy regions for each genome
 //        ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs);
 //        extractSingleCopyRegions.run(genomeMap, minCount, minLength, threads);
-//
-//        // set commandline options for mmseqs2 clustering
+
+        // set commandline options for mmseqs2 clustering
 //        RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()
 //                .threads(threads)
 //                .minSeqIdentity(minSeqIdentity)

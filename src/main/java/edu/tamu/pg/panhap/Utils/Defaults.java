@@ -18,6 +18,9 @@ public final class Defaults {
     public static final double MIN_SEQ_IDENTITY = 0.9;
     public static final double MIN_COVERAGE = 0.8;
     public static final int COV_MODE = 1;
+    public static final int FLOAT_DIGITS = 2;
+    public static final CharSequence FIELD_SEPERATOR = "\t";
+    public static final int THREADS = 2;
 
 
     private Defaults() {}

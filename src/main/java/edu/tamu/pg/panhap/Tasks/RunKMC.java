@@ -24,6 +24,37 @@ public class RunKMC {
         this.config = config;
     }
 
+    public RunKMC(KMCConfig config) {
+        this.dirs = null;
+        this.config = config;
+    }
+
+    public void run(Path fastaPath, Path kmcPrefix) throws IOException {
+
+            String logFile = kmcPrefix + ".kmc.log";
+
+            // kmcPrefix baseDir / tmp
+            Path parent = kmcPrefix.getParent();
+            Path tmpDir = (parent == null) ? Path.of("tmp") : parent.resolve("tmp");
+            Logger.info(CLASS_NAME, "Creating temporary directory for KMC: " + tmpDir);
+            FileUtils.mkdir(tmpDir);
+        try {
+            String command = buildCommand(
+                    fastaPath.toString(),
+                    kmcPrefix.toString(),
+                    tmpDir
+            );
+
+            Logger.info(CLASS_NAME, "Running KMC for fasta: " + fastaPath);
+            Logger.info(CLASS_NAME, command);
+
+            HelperFunctions.tryExec(command, logFile, logFile);
+        }
+        finally {
+            FileUtils.rmdir(tmpDir);
+        }
+    }
+
     public void run(GenomeMap genomeMap) throws IOException {
 
         // if the maxMemory is less than 2.0GB, return error and exit
@@ -44,7 +75,11 @@ public class RunKMC {
 
                 String logFile = kmcDir.resolve(id + ".kmc.log").toString();
 
-                String command = buildCommand(id, genomesDir, kmcDir, tmpDir);
+                String command = buildCommand(
+                        genomesDir.resolve(id + ".fasta").toString(),
+                        kmcDir.resolve(id).toString(),
+                        tmpDir
+                );
 
                 Logger.info(CLASS_NAME, "Running KMC for genome: " + id);
                 Logger.info(CLASS_NAME, command);
@@ -57,9 +92,8 @@ public class RunKMC {
         }
     }
 
-    private String buildCommand(String id,
-                                Path genomesDir,
-                                Path kmcDir,
+    private String buildCommand(String input,
+                                String outputPrefix,
                                 Path tmpDir) {
 
         return String.join(" ",
@@ -70,8 +104,8 @@ public class RunKMC {
                 "-t" + config.getThreads(),
                 "-m" + config.getMaxMemory(),
                 "-fm",
-                genomesDir.resolve(id + ".fasta").toString(),
-                kmcDir.resolve(id).toString(),
+                input,
+                outputPrefix,
                 tmpDir.toString()
         );
     }
@@ -135,9 +169,6 @@ public class RunKMC {
             }
 
             public Builder minCount(int value) {
-                if (value < 2) {
-                    Logger.error(CLASS_NAME, "Min count must be at least 2.");
-                }
                 this.minCount = value;
                 return this;
             }
