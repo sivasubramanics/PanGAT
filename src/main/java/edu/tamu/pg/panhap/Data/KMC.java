@@ -84,7 +84,7 @@ public class KMC implements AutoCloseable {
     private void preloadSuffixBuffers(String kmcSuffixFile) throws IOException {
         Logger.info(CLASS_NAME, "Loading KMC suffix file " + kmcSuffixFile + " into memory");
         Logger.warning(CLASS_NAME, "OutOfMemoryError may occur if the suffix file is too large");
-        Logger.warning(CLASS_NAME, "Consider using the KCFTOOLS_HEAP_SIZE setting");
+        Logger.warning(CLASS_NAME, "Consider using the JAVA_TOOL_OPTIONS setting");
         int fullPageSize = MAX_BYTE_COUNT / record_size * record_size; // in bytes
         int numberOfPages = (int) ((totalKmers * record_size) / fullPageSize + ((totalKmers * record_size) % fullPageSize == 0 ? 0 : 1));
 
