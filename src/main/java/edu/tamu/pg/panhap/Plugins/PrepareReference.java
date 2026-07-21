@@ -21,13 +21,13 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     @Option(names = {"-b", "--basedir"}, description = "Base directory for the output", required = true)
     private Path baseDir;
 
-    @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing", required = false, defaultValue = "1")
+    @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing", required = false, defaultValue = "2")
     private int threads;
 
     @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC", required = false, defaultValue = "31")
     private int kmerSize;
 
-    @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "1")
+    @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "2")
     private int minCount;
 
     @Option(names = {"--min_seq_identity"}, description = "Minimum sequence identity for MMseqs2 clustering", required = false, defaultValue = "0.9")
@@ -63,37 +63,37 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         dirs.createDirectories();
 
         // prepareReference();
-//        PrepareData data = new PrepareData(dirs, genomes, threads);
-//        data.prepare();
+        PrepareData data = new PrepareData(dirs, genomes, threads);
+        data.prepare();
 
         // load genome map from genomesMap.csv
         GenomeMap genomeMap = new GenomeMap(dirs);
 
         // set commandline options for KMC
-//        RunKMC.KMCConfig config = RunKMC.KMCConfig.builder()
-//                .threads(threads)
-//                .kmerSize(kmerSize)
-//                .minCount(minCount)
-//                .build();
+        RunKMC.KMCConfig config = RunKMC.KMCConfig.builder()
+                .threads(threads)
+                .kmerSize(kmerSize)
+                .minCount(minCount)
+                .build();
 
         // run KMC for each genome
-//        RunKMC runKMC = new RunKMC(dirs, config);
-//        runKMC.run(genomeMap);
+        RunKMC runKMC = new RunKMC(dirs, config);
+        runKMC.run(genomeMap);
 
         // extract single copy regions for each genome
-//        ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs);
-//        extractSingleCopyRegions.run(genomeMap, minCount, minLength, threads);
+        ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs);
+        extractSingleCopyRegions.run(genomeMap, minCount, minLength, threads);
 
         // set commandline options for mmseqs2 clustering
-//        RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()
-//                .threads(threads)
-//                .minSeqIdentity(minSeqIdentity)
-//                .minCoverage(minCoverage)
-//                .covMode(covMode)
-//                .build();
-//        // run MMseqs2 clustering
-//        RunMMseqs runMMseqs = new RunMMseqs(dirs, mmseqsConfig);
-//        runMMseqs.run(genomeMap);
+        RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()
+                .threads(threads)
+                .minSeqIdentity(minSeqIdentity)
+                .minCoverage(minCoverage)
+                .covMode(covMode)
+                .build();
+        // run MMseqs2 clustering
+        RunMMseqs runMMseqs = new RunMMseqs(dirs, mmseqsConfig);
+        runMMseqs.run(genomeMap);
 
         PanCluster panCluster = new PanCluster(dirs);
         panCluster.run(genomeMap);
@@ -109,7 +109,6 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         } catch (Exception e) {
             e.printStackTrace();
         }
-
     }
 }
 
