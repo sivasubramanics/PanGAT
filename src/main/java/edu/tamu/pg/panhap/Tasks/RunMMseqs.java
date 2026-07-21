@@ -100,10 +100,6 @@ public class RunMMseqs {
         String[] filesToDelete = {
                 "clusters.dbtype",
                 "clusters.index",
-                "clusters.3",
-                "clusters.2",
-                "clusters.1",
-                "clusters.0",
                 "all_single_copy_regions.db_h.dbtype",
                 "all_single_copy_regions.db.dbtype",
                 "all_single_copy_regions.db.lookup",
@@ -118,6 +114,16 @@ public class RunMMseqs {
             Path file = singleCopyDir.resolve(filename);
             if (Files.exists(file)) {
                 FileUtils.rmFile(file);
+            }
+        }
+
+        // remove all files with clusters.%d
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(singleCopyDir)) {
+            for (Path file : stream) {
+                String name = file.getFileName().toString();
+                if (name.matches("clusters\\.\\d+")) {
+                    FileUtils.rmFile(file);
+                }
             }
         }
 
