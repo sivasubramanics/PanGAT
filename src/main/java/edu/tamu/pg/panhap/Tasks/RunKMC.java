@@ -190,7 +190,4 @@ public class RunKMC {
     }
 }
 
-// kmc_tools simple test_data/output/01.kmc/Elliot_HAP1 test_data/output/01.kmc/Elliot_HAP2 intersect Elliot -ocright
-// kmc_tools transform Elliot dump Elliot.tsv
-
 
