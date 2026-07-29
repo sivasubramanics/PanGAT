@@ -1,17 +1,20 @@
 package edu.tamu.pg.panhap;
 
+import edu.tamu.pg.panhap.Tasks.KmerCoverage;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
 import edu.tamu.pg.panhap.Plugins.*;
 import edu.tamu.pg.panhap.Utils.*;
-//import edu.tamu.pg.panhap.Data.*;
+
 
 import java.util.Locale;
 
 
 @Command(name = "panhap", description = "PANgenome HAPlotype catalog and genotyping toolkit", mixinStandardHelpOptions = true, versionProvider = Configs.VersionProvider.class,
         subcommands = {
-            PrepareReference.class
+            PrepareReference.class,
+                Genotype.class,
+                KmerCoverage.class,
         })
 public class PanHap {
     public static void main(String[] args) {
