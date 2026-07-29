@@ -1,5 +1,6 @@
 package edu.tamu.pg.panhap.Data;
 
+import edu.tamu.pg.panhap.Utils.FileUtils;
 import edu.tamu.pg.panhap.Utils.HelperFunctions;
 import edu.tamu.pg.panhap.Utils.Logger;
 
@@ -11,6 +12,7 @@ import java.nio.BufferUnderflowException;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
+import java.nio.file.Path;
 import java.util.Arrays;
 
 import static edu.tamu.pg.panhap.Data.Kmer.binaryToKmer;
@@ -22,6 +24,7 @@ import static edu.tamu.pg.panhap.Data.Kmer.binaryToKmer;
 public class KMC implements AutoCloseable {
     private final String kmcPrefixFile;
     private final String kmcSuffixFile;
+    private final String kmcDBName;
     private int kmerLength;
     private int mode;
     private int counterSize;
@@ -54,6 +57,7 @@ public class KMC implements AutoCloseable {
     }
 
     public KMC(String kmcDBName, boolean inMemory) throws IOException {
+        this.kmcDBName = kmcDBName;
         this.kmcPrefixFile = kmcDBName + ".kmc_pre";
         this.kmcSuffixFile = kmcDBName + ".kmc_suf";
         readPrefixFile(kmcPrefixFile);
@@ -404,7 +408,6 @@ public class KMC implements AutoCloseable {
         return kmerLength;
     }
 
-
     public int getPrefixLength() {
         return lutPrefixLength;
     }
@@ -448,5 +451,34 @@ public class KMC implements AutoCloseable {
             Logger.error(CLASS_NAME, "Error writing kmer table to file " + kmerTableFile);
         }
     }
+
+    /***
+     * delete kmc prefix and suffix files
+     */
+    public void rmKMCfiles() {
+        Logger.info(CLASS_NAME, "Removing KMC files");
+        FileUtils.rmFile(getKMCPrefixFile());
+        FileUtils.rmFile(getKMCSuffixFile());
+        if (getKMCLogFile() != null) {
+            FileUtils.rmFile(getKMCLogFile());
+        }
+    }
+
+    public Path getKMCPrefixFile() {
+        return Path.of(this.kmcPrefixFile);
+    }
+    public Path getKMCSuffixFile() {
+        return Path.of(this.kmcSuffixFile);
+    }
+
+    public Path getKMCLogFile() {
+        if (FileUtils.isFile(Path.of(this.kmcDBName + ".kmc.log"))) {
+            return Path.of(this.kmcDBName + ".kmc.log");
+        } else {
+            return null;
+        }
+    }
+
+
 }
 //EOF
