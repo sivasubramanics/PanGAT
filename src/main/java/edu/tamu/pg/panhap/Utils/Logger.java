@@ -8,7 +8,7 @@ import java.util.Date;
  */
 public class Logger {
     public enum LogLevel {
-        INFO, WARNING, ERROR, DEBUG, UNKNOWN
+        INFO, WARNING, ERROR, DEBUG, UNKNOWN, PROGRESS
     }
 
     public static void log(LogLevel logLevel, String className, String message) {
@@ -24,7 +24,11 @@ public class Logger {
             return;
         }
 
-        System.out.println(logPrefix + message);
+        if (logLevel == LogLevel.PROGRESS) {
+            System.out.printf("\r%s", logPrefix + message);
+        } else {
+            System.out.println(logPrefix + message);
+        }
 
         if (logLevel == LogLevel.ERROR) {
             System.exit(1);
@@ -40,6 +44,7 @@ public class Logger {
             case WARNING -> "WARNING ";
             case ERROR -> "ERROR   ";
             case DEBUG -> "DEBUG   ";
+            case PROGRESS -> "PROGRESS";
             default -> "UNKNOWN ";
         };
     }
@@ -63,6 +68,13 @@ public class Logger {
      */
     public static void error(String className, String message) {
         log(LogLevel.ERROR, className, message);
+    }
+
+    /***
+     * print progress with inplacement texts
+     */
+    public static void progress(String className, String message) {
+        log(LogLevel.PROGRESS, className, message);
     }
 
     /***
