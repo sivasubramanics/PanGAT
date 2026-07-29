@@ -3,7 +3,8 @@ package edu.tamu.pg.panhap.Utils;
 public enum PipelineSteps {
     GENOMES("00.genomes"),
     KMC("01.kmc"),
-    SINGLE_COPY("02.single_copy");
+    SINGLE_COPY("02.single_copy"),
+    GENOTYPING("03.genotyping");
 
     private final String dirName;
 

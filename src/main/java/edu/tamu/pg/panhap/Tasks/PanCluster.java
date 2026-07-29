@@ -1,10 +1,7 @@
 package edu.tamu.pg.panhap.Tasks;
 
 import edu.tamu.pg.panhap.Data.*;
-import edu.tamu.pg.panhap.Utils.Defaults;
-import edu.tamu.pg.panhap.Utils.HelperFunctions;
-import edu.tamu.pg.panhap.Utils.Logger;
-import edu.tamu.pg.panhap.Utils.PipelineSteps;
+import edu.tamu.pg.panhap.Utils.*;
 import org.jgrapht.Graph;
 import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleGraph;
@@ -27,7 +24,7 @@ public class PanCluster {
     public PanCluster(DirectoryStructure dirs) {
         this.singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
         this.clustersFile = singleCopyDir.resolve("clusters.tsv");
-        this.scrFile = singleCopyDir.resolve("all_single_copy_regions.fasta");
+        this.scrFile = dirs.getSingleCopyReference();
         this.nThreads = 2;
     }
 
@@ -182,7 +179,8 @@ public class PanCluster {
             }
         }
 
-        try (FastaWriter fastaWriter = new FastaWriter(singleCopyDir.resolve("pan_clusters.fasta").toString())) {
+        Path panClustersFasta = singleCopyDir.resolve("pan_clusters.fasta");
+        try (FastaWriter fastaWriter = new FastaWriter(panClustersFasta.toString())) {
             for (String seqId : panScrIDs) {
                 Fasta scr = fastaMap.get(seqId);
                 if (scr != null) {
@@ -193,13 +191,17 @@ public class PanCluster {
             }
         }
 
-        RunKMC.KMCConfig config = RunKMC.KMCConfig.builder()
+        Path kmcPrefix = singleCopyDir.resolve("pan_clusters");
+        KMCConfig kmcConfig = KMCConfig.builder()
+                .inputPath(panClustersFasta)
+                .outputPrefix(kmcPrefix)
                 .threads(nThreads)
                 .kmerSize(51)
                 .minCount(1)
                 .build();
-        RunKMC runKMC = new RunKMC(config);
-        runKMC.run(singleCopyDir.resolve("pan_clusters.fasta"), singleCopyDir.resolve("pan_clusters"));
+
+        Logger.info(CLASS_NAME, "Running KMC on pan_clusters fasta...");
+        KMCExecutor.run(kmcConfig);
     }
 
     /**

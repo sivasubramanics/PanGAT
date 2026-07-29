@@ -50,4 +50,12 @@ public class DirectoryStructure {
     public Path getDirectory(PipelineSteps step) {
         return baseDir.resolve(step.dirName());
     }
+
+    public Path getSingleCopyReference() {
+        return baseDir.resolve(PipelineSteps.SINGLE_COPY.dirName()).resolve("all_single_copy_regions.fasta");
+    }
+
+    public Path getGenotypeDir() {
+        return baseDir.resolve(PipelineSteps.GENOTYPING.dirName());
+    }
 }
