@@ -7,7 +7,6 @@ import edu.tamu.pg.panhap.Utils.*;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
 import java.io.*;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
@@ -44,14 +43,6 @@ public class PrepareReference implements Callable<Integer>, Runnable {
 
     private static final String CLASS_NAME = PrepareReference.class.getSimpleName();
 
-    private Path genomesDir;
-    private Path kmcDir;
-    private Path singleCopyDir;
-
-    double HEAPSIZE = Runtime.getRuntime().maxMemory() / (1024.0 * 1024 * 1024);
-    int COUNTER_DUMP_SIZE = 100_000;
-
-
     public Integer call() throws Exception {
 
         // check if necessary tools are accessible
@@ -69,16 +60,9 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         // load genome map from genomesMap.csv
         GenomeMap genomeMap = new GenomeMap(dirs);
 
-        // set commandline options for KMC
-        RunKMC.KMCConfig config = RunKMC.KMCConfig.builder()
-                .threads(threads)
-                .kmerSize(kmerSize)
-                .minCount(minCount)
-                .build();
-
         // run KMC for each genome
-        RunKMC runKMC = new RunKMC(dirs, config);
-        runKMC.run(genomeMap);
+        RunKMC runKMC = new RunKMC(dirs);
+        runKMC.run(genomeMap, kmerSize, minCount, threads);
 
         // extract single copy regions for each genome
         ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs);
@@ -98,7 +82,6 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         PanCluster panCluster = new PanCluster(dirs);
         panCluster.run(genomeMap);
 
-
         return 0;
     }
 
@@ -111,5 +94,3 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         }
     }
 }
-
-

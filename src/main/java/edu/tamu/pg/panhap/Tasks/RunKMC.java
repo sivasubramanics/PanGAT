@@ -11,183 +11,71 @@ public class RunKMC {
     private static final String CLASS_NAME = RunKMC.class.getSimpleName();
 
     private final DirectoryStructure dirs;
-    private final KMCConfig config;
+    private final int threads;
+    private final int kmerSize;
+    private final int minCount;
+    private final double maxMemory;
+
+    public RunKMC(DirectoryStructure dirs) {
+        this(dirs, 1, Defaults.K_SIZE, Defaults.MIN_COUNT, Defaults.HEAPSIZE);
+    }
 
     public RunKMC(DirectoryStructure dirs, int threads) {
-        this(dirs, KMCConfig.builder()
-                .threads(threads)
-                .build());
+        this(dirs, threads, Defaults.K_SIZE, Defaults.MIN_COUNT, Defaults.HEAPSIZE);
     }
 
-    public RunKMC(DirectoryStructure dirs, KMCConfig config) {
+    public RunKMC(DirectoryStructure dirs, int threads, int kmerSize, int minCount) {
+        this(dirs, threads, kmerSize, minCount, Defaults.HEAPSIZE);
+    }
+
+    public RunKMC(DirectoryStructure dirs, int threads, int kmerSize, int minCount, double maxMemory) {
         this.dirs = dirs;
-        this.config = config;
+        this.threads = threads;
+        this.kmerSize = kmerSize;
+        this.minCount = minCount;
+        this.maxMemory = maxMemory;
     }
 
-    public RunKMC(KMCConfig config) {
-        this.dirs = null;
-        this.config = config;
-    }
-
-    public void run(Path fastaPath, Path kmcPrefix) throws IOException {
-
-            String logFile = kmcPrefix + ".kmc.log";
-
-            // kmcPrefix baseDir / tmp
-            Path parent = kmcPrefix.getParent();
-            Path tmpDir = (parent == null) ? Path.of("tmp") : parent.resolve("tmp");
-            Logger.info(CLASS_NAME, "Creating temporary directory for KMC: " + tmpDir);
-            FileUtils.mkdir(tmpDir);
-        try {
-            String command = buildCommand(
-                    fastaPath.toString(),
-                    kmcPrefix.toString(),
-                    tmpDir
-            );
-
-            Logger.info(CLASS_NAME, "Running KMC for fasta: " + fastaPath);
-            Logger.info(CLASS_NAME, command);
-
-            HelperFunctions.tryExec(command, logFile, logFile);
-        }
-        finally {
-            FileUtils.rmdir(tmpDir);
-        }
-    }
-
+    /**
+     * Runs KMC for each genome in the GenomeMap using default/constructor configurations.
+     */
     public void run(GenomeMap genomeMap) throws IOException {
+        run(genomeMap, this.kmerSize, this.minCount, this.threads, this.maxMemory);
+    }
 
-        // if the maxMemory is less than 2.0GB, return error and exit
-        if (config.getMaxMemory() < 2.0) {
-            Logger.error(CLASS_NAME, "Max memory must be at least 2.0GB for KMC to run.");
+    /**
+     * Runs KMC for each genome in the GenomeMap with explicit execution parameters.
+     */
+    public void run(GenomeMap genomeMap, int kmerSize, int minCount, int threads) throws IOException {
+        run(genomeMap, kmerSize, minCount, threads, this.maxMemory);
+    }
+
+    /**
+     * Core execution method iterating through all genomes in the map.
+     */
+    public void run(GenomeMap genomeMap, int kmerSize, int minCount, int threads, double maxMemory) throws IOException {
+        if (dirs == null) {
+            throw new IllegalStateException("DirectoryStructure must be provided to run KMC with GenomeMap.");
         }
 
         Path kmcDir = dirs.getDirectory(PipelineSteps.KMC);
         Path genomesDir = dirs.getDirectory(PipelineSteps.GENOMES);
 
-        Path tmpDir = kmcDir.resolve("tmp");
+        for (String id : genomeMap.getOrgGenomes()) {
+            Path fastaPath = genomesDir.resolve(id + ".fasta");
+            Path outputPrefix = kmcDir.resolve(id);
 
-        FileUtils.mkdir(tmpDir);
+            KMCConfig kmcConfig = KMCConfig.builder()
+                    .inputPath(fastaPath)
+                    .outputPrefix(outputPrefix)
+                    .kmerSize(kmerSize)
+                    .minCount(minCount)
+                    .threads(threads)
+                    .maxMemory(maxMemory)
+                    .build();
 
-        try {
-
-            for (String id : genomeMap.getOrgGenomes()) {
-
-                String logFile = kmcDir.resolve(id + ".kmc.log").toString();
-
-                String command = buildCommand(
-                        genomesDir.resolve(id + ".fasta").toString(),
-                        kmcDir.resolve(id).toString(),
-                        tmpDir
-                );
-
-                Logger.info(CLASS_NAME, "Running KMC for genome: " + id);
-                Logger.info(CLASS_NAME, command);
-
-                HelperFunctions.tryExec(command, logFile, logFile);
-            }
-
-        } finally {
-            FileUtils.rmdir(tmpDir);
-        }
-    }
-
-    private String buildCommand(String input,
-                                String outputPrefix,
-                                Path tmpDir) {
-
-        return String.join(" ",
-                "kmc",
-                "-k" + config.getKmerSize(),
-                "-p" + config.getSignatureLength(),
-                "-ci" + config.getMinCount(),
-                "-t" + config.getThreads(),
-                "-m" + config.getMaxMemory(),
-                "-fm",
-                input,
-                outputPrefix,
-                tmpDir.toString()
-        );
-    }
-
-    public static class KMCConfig {
-
-        private final int kmerSize;
-        private final int signatureLength;
-        private final int minCount;
-        private final double maxMemory;
-        private final int threads;
-
-        private KMCConfig(Builder builder) {
-            this.kmerSize = builder.kmerSize;
-            this.signatureLength = builder.signatureLength;
-            this.minCount = builder.minCount;
-            this.maxMemory = builder.maxMemory;
-            this.threads = builder.threads;
-        }
-
-        public int getKmerSize() {
-            return kmerSize;
-        }
-
-        public int getSignatureLength() {
-            return signatureLength;
-        }
-
-        public int getMinCount() {
-            return minCount;
-        }
-
-        public double getMaxMemory() {
-            return maxMemory;
-        }
-
-        public int getThreads() {
-            return threads;
-        }
-
-        public static Builder builder() {
-            return new Builder();
-        }
-
-        public static class Builder {
-
-            private int kmerSize = Defaults.K_SIZE;
-            private int signatureLength = Defaults.SIGNATURE_LENGTH;
-            private int minCount = Defaults.MIN_COUNT;
-            private double maxMemory = Defaults.HEAPSIZE;
-            private int threads = 1;
-
-            public Builder kmerSize(int value) {
-                this.kmerSize = value;
-                return this;
-            }
-
-            public Builder signatureLength(int value) {
-                this.signatureLength = value;
-                return this;
-            }
-
-            public Builder minCount(int value) {
-                this.minCount = value;
-                return this;
-            }
-
-            public Builder maxMemory(double value) {
-                this.maxMemory = value;
-                return this;
-            }
-
-            public Builder threads(int value) {
-                this.threads = value;
-                return this;
-            }
-
-            public KMCConfig build() {
-                return new KMCConfig(this);
-            }
+            Logger.info(CLASS_NAME, "Running KMC for genome: " + id);
+            KMCExecutor.run(kmcConfig);
         }
     }
 }
-
-
