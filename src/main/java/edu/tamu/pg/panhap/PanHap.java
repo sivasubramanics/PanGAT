@@ -1,6 +1,7 @@
 package edu.tamu.pg.panhap;
 
 import edu.tamu.pg.panhap.Tasks.KmerCoverage;
+import edu.tamu.pg.panhap.Tasks.SingleCopy;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
 import edu.tamu.pg.panhap.Plugins.*;
@@ -15,6 +16,7 @@ import java.util.Locale;
             PrepareReference.class,
                 Genotype.class,
                 KmerCoverage.class,
+                SingleCopy.class
         })
 public class PanHap {
     public static void main(String[] args) {
