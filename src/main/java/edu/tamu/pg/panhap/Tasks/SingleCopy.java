@@ -10,35 +10,31 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Command(name = "SingleCopy", description = "Identify single-copy region sequences from multifasta.", sortOptions = false)
 public class SingleCopy implements Callable<Integer>, Runnable {
-    // input fasta
+
     @Option(names = {"-i", "--input"}, description = "Input multifasta file", required = true)
     private Path input;
 
-    // kmc db
     @Option(names = {"-k", "--kmc"}, description = "Path to the KMC database", required = true)
     private String kmcPrefix;
 
-    // output fasta
     @Option(names = {"-o", "--output"}, description = "Output fasta file for single-copy regions", required = true)
     private Path output;
 
-    // minimum count
     @Option(names = {"--count"}, description = "Max count for kmer for single-copy region extraction", required = false, defaultValue = "1")
     private int count;
 
-    // min length
     @Option(names = {"--minlength"}, description = "Minimum length for single-copy region extraction", required = false, defaultValue = "100")
     private int minLength;
 
-    // number of threads
     @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing", required = false, defaultValue = "1")
     private int threads;
 
     private static final String CLASS_NAME = SingleCopy.class.getSimpleName();
-    private static final int dumpSize = Defaults.COUNTER_DUMP_SIZE;
 
     public SingleCopy() {}
 
@@ -52,7 +48,7 @@ public class SingleCopy implements Callable<Integer>, Runnable {
 
     @Override
     public Integer call() throws Exception {
-        processGenome(input, kmcPrefix, count, output, threads);
+        processGenomeParallel(input, kmcPrefix, count, output, threads);
         return 0;
     }
 
@@ -60,93 +56,100 @@ public class SingleCopy implements Callable<Integer>, Runnable {
     public void run() {
         try {
             call();
+        } catch (Exception e) {
+            Logger.error(CLASS_NAME, "Execution failed: " + e.getMessage());
         }
-        catch (Exception e) {
-            e.printStackTrace();
-        }
-
     }
 
-    private void processGenome(Path input, String kmcPrefix, int count, Path output, int threads) {
-        // Larger buffer: 256KB instead of the default 8KB
+    private void processGenomeParallel(Path input, String kmcPrefix, int maxCount, Path output, int numThreads) {
+        ForkJoinPool customThreadPool = null;
         try (FastaWriter writer = new FastaWriter(output, false);
-             KMC kmc = new KMC(kmcPrefix, true);
-            FastaReader genome = new FastaReader(input)) {
+             FastaReader genome = new FastaReader(input)) {
 
-            int kSize = kmc.getKmerLength();
-            int prefixLength = kmc.getPrefixLength();
-            boolean isCanonical = kmc.isBothStrands();
-            for (Fasta chrom:genome) {
-                int counter = 0;
-                List<Fasta> singleCopyRegions = new ArrayList<>();
-                int numSingleCopy = 0;
-                StringBuilder singleCopySeq = new StringBuilder();
-                boolean isBeginning = true;
-                int regionStart = -1;     // track where the region began
-                int currentEnd = -1;      // track the latest position seen
-
-                KmerIterator it = chrom.kmers(kSize, prefixLength, isCanonical);
-
-                while (it.hasNext()) {
-                    KmerPosition kp = it.next();
-                    int start = kp.getStartPos();
-                    Kmer kmer = kp.getKmer();
-
-                    int kmerCount = kmc.getCount(kmer);
-                    if (kmerCount == 0) {
-                        Logger.error(CLASS_NAME, "kmer :" + kmer.toString() + " not found in the kmc database. Make sure the input fasta was used to generate the kmc database.");
-                    }
-                    if (kmerCount <= count) {
-                        if (isBeginning) {
-                            regionStart = start;
-                            singleCopySeq.append(kmer.getOriginalKmer());
-                            isBeginning = false;
-                        } else {
-                            // Append only the new last char — avoids a full String allocation
-                            singleCopySeq.append(kmer.getOriginalKmer()[kSize - 1]);
-                        }
-                        currentEnd = start + kSize;
-                    } else {
-                        if (!singleCopySeq.isEmpty()) {
-                            if (singleCopySeq.length() >= minLength) {
-                                singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + "" + numSingleCopy, singleCopySeq.toString(), regionStart + "-" + currentEnd));
-                                if (counter == dumpSize) {
-                                    for (Fasta scr : singleCopyRegions) {
-                                        writer.write(scr, false);
-                                    }
-                                    singleCopyRegions.clear();
-                                    counter = 0;
-                                    Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for chromsome " + chrom.getName());
-                                }
-                                counter++;
-                                numSingleCopy++;
-                            }
-                            singleCopySeq.setLength(0);
-                        }
-                        isBeginning = true;
-                        regionStart = -1;
-//                        it.skipTo(start + kSize);  // Skip to the next kmer position
-                    }
-                }
-
-                // ── Flush any region still open at end of chromosome ──
-                if (!singleCopySeq.isEmpty()) {
-                    if (singleCopySeq.length() >= minLength) {
-                        singleCopyRegions.add(new Fasta(numSingleCopy, chrom.getName() + "_" + numSingleCopy, singleCopySeq.toString(), regionStart + "-" + currentEnd));
-                        numSingleCopy++;
-                    }
-                    singleCopySeq.setLength(0);
-                }
-
-                if (!singleCopyRegions.isEmpty()) {
-                    for (Fasta scr : singleCopyRegions) {
-                        writer.write(scr, true);
-                    }
-                }
-                Logger.info(CLASS_NAME, "Dumped " + numSingleCopy + " single copy regions for chromsome " + chrom.getName());
+            // Read all chromosomes into a list for parallel stream distribution
+            List<Fasta> chromosomes = new ArrayList<>();
+            for (Fasta f : genome) {
+                chromosomes.add(f);
             }
-        } catch (IOException e) {
-            Logger.error(CLASS_NAME, "Error writing single copy regions: " + e.getMessage());
+
+            KMC kmc = new KMC(kmcPrefix, true);
+
+            customThreadPool = new ForkJoinPool(numThreads);
+
+            // Parallel processing across chromosomes
+            customThreadPool.submit(() -> chromosomes.parallelStream().forEach(chrom -> {
+                // Thread-local KMC reader to avoid locking overhead
+                try {
+                    processSingleChromosome(chrom, kmc, maxCount, writer);
+                } catch (Exception e) {
+                    Logger.error(CLASS_NAME, "Error processing chromosome " + chrom.getName() + ": " + e.getMessage());
+                }
+            })).get();
+
+        } catch (Exception e) {
+            Logger.error(CLASS_NAME, "Error processing single-copy regions: " + e.getMessage());
+        } finally {
+            if (customThreadPool != null) {
+                customThreadPool.shutdown();
+            }
         }
+    }
+
+    private void processSingleChromosome(Fasta chrom, KMC kmc, int maxCount, FastaWriter writer) throws IOException {
+        int kSize = kmc.getKmerLength();
+        int prefixLength = kmc.getPrefixLength();
+        boolean isCanonical = kmc.isBothStrands();
+
+        StringBuilder singleCopySeq = new StringBuilder(1024);
+
+        int regionStart = -1;
+        int currentEnd = -1;
+        boolean isBeginning = true;
+        AtomicInteger numSingleCopy = new AtomicInteger(0);
+
+        KmerIterator it = chrom.kmers(kSize, prefixLength, isCanonical);
+
+        while (it.hasNext()) {
+            KmerPosition kp = it.next();
+            int start = kp.getStartPos();
+            Kmer kmer = kp.getKmer();
+
+            int kmerCount = kmc.getCount(kmer);
+
+            if (kmerCount <= maxCount && kmerCount > 0) {
+                if (isBeginning) {
+                    regionStart = start;
+                    // Extract directly from parent sequence string to avoid array copies
+                    singleCopySeq.append(kmer.getOriginalKmer());
+                    isBeginning = false;
+                } else {
+                    // Append only the trailing base directly from sequence
+                    singleCopySeq.append(kmer.getOriginalKmer()[kSize - 1]);
+                }
+                currentEnd = start + kSize;
+            } else {
+                if (singleCopySeq.length() >= minLength) {
+                    writeRegion(writer, chrom.getName(), numSingleCopy.getAndIncrement(),
+                            singleCopySeq.toString(), regionStart, currentEnd);
+                }
+                singleCopySeq.setLength(0);
+                isBeginning = true;
+                regionStart = -1;
+            }
+        }
+
+        // Flush remaining region at chromosome end
+        if (singleCopySeq.length() >= minLength) {
+            writeRegion(writer, chrom.getName(), numSingleCopy.getAndIncrement(),
+                    singleCopySeq.toString(), regionStart, currentEnd);
+        }
+
+        Logger.info(CLASS_NAME, "Completed " + numSingleCopy.get() + " single copy regions for chromosome " + chrom.getName());
+    }
+
+    private synchronized void writeRegion(FastaWriter writer, String chromName, int index,
+                                          String seq, int start, int end) throws IOException {
+        Fasta scr = new Fasta(index, chromName + "_" + index, seq, start + "-" + end);
+        writer.write(scr, true);
     }
 }
