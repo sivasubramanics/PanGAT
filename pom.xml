@@ -4,17 +4,17 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>edu.tamu.pg</groupId>
-    <artifactId>panhap</artifactId>
+    <artifactId>pang2p</artifactId>
     <version>0.0.1</version>
     <packaging>jar</packaging>
-    <name>panhap</name>
+    <name>pang2p</name>
     <description>Tools to handle k-mer count-based variants</description>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <java.version>17</java.version>
-        <app.main.class>edu.tamu.pg.panhap.PanHap</app.main.class>
+        <app.main.class>edu.tamu.pg.pang2p.PanG2P</app.main.class>
     </properties>
 
     <dependencies>
