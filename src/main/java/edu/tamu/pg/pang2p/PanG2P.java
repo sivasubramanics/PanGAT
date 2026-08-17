@@ -1,5 +1,7 @@
 package edu.tamu.pg.pang2p;
 
+import edu.tamu.pg.pang2p.Tasks.Cohort;
+import edu.tamu.pg.pang2p.Tasks.ExportMatrix;
 import edu.tamu.pg.pang2p.Tasks.KmerCoverage;
 import edu.tamu.pg.pang2p.Tasks.SingleCopy;
 import picocli.CommandLine;
@@ -16,7 +18,9 @@ import java.util.Locale;
             PrepareReference.class,
                 Genotype.class,
                 KmerCoverage.class,
-                SingleCopy.class
+                SingleCopy.class,
+                Cohort.class,
+                ExportMatrix.class
         })
 public class PanG2P {
     public static void main(String[] args) {
