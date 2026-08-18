@@ -272,23 +272,33 @@ public class HelperFunctions {
         Logger.info(className, "========== CMD options - " + className + " ==========");
         for (CommandLine.Model.OptionSpec option : commandLine.getCommandSpec().options()) {
             if (option.isOption()) {
-                // get long name of the command
                 if (option.names().length == 1) {
                     name = option.names()[0];
-                }
-                else {
+                } else {
                     name = option.names()[1];
                 }
-                // if getValue is null skip
-                if (option.getValue() == null) {
+
+                // Skip if getValue is null
+                Object rawValue = option.getValue();
+                if (rawValue == null) {
                     continue;
                 }
-                value = option.getValue().toString();
-                Logger.info(className, String.format("%-15s: %s", name, value));
+
+                // Format arrays and collections cleanly
+                if (rawValue.getClass().isArray()) {
+                    value = Arrays.toString((Object[]) rawValue);
+                } else if (rawValue instanceof Collection<?>) {
+                    value = rawValue.toString();
+                } else {
+                    value = rawValue.toString();
+                }
+
+                Logger.info(className, String.format("%-20s: %s", name, value));
             }
         }
         Logger.info(className, "==================================================");
     }
+
 
     /***
      * Print the memory usage

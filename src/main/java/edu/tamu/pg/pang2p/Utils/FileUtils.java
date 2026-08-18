@@ -1,11 +1,12 @@
 package edu.tamu.pg.pang2p.Utils;
 
-import java.io.File;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 public class FileUtils {
 
@@ -179,5 +180,40 @@ public class FileUtils {
         } catch (IOException e) {
             Logger.error(CLASS_NAME, "Failed to delete file: " + e.getMessage());
         }
+    }
+
+    public static BufferedReader reader(Path path) throws IOException {
+        InputStream is = Files.newInputStream(path);
+        if (path.getFileName().toString().endsWith(".gz")) {
+            is = new GZIPInputStream(is);
+        }
+        return new BufferedReader(new InputStreamReader(is));
+    }
+
+    public static BufferedReader reader(File file) throws IOException {
+        return reader(file.toPath());
+    }
+
+    public static BufferedReader reader(String filePath) throws IOException {
+        return reader(Path.of(filePath));
+    }
+
+    /**
+     * Creates a BufferedWriter for a file, automatically handling gzipped files (.gz).
+     */
+    public static BufferedWriter writer(Path path) throws IOException {
+        OutputStream os = Files.newOutputStream(path);
+        if (path.getFileName().toString().endsWith(".gz")) {
+            os = new GZIPOutputStream(os);
+        }
+        return new BufferedWriter(new OutputStreamWriter(os));
+    }
+
+    public static BufferedWriter writer(File file) throws IOException {
+        return writer(file.toPath());
+    }
+
+    public static BufferedWriter writer(String filePath) throws IOException {
+        return writer(Path.of(filePath));
     }
 }

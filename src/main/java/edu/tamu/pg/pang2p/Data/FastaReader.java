@@ -1,27 +1,27 @@
 package edu.tamu.pg.pang2p.Data;
 
+import edu.tamu.pg.pang2p.Utils.FileUtils;
 import edu.tamu.pg.pang2p.Utils.Logger;
 
 import java.io.BufferedReader;
-import java.io.FileReader;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 
 public class FastaReader implements Iterable<Fasta>, AutoCloseable {
-    private final String fastaFile;
+    private final Path fastaPath;
     private FastaIterator iterator;
 
     private final String CLASS_NAME = this.getClass().getSimpleName();
 
     public FastaReader(Path fastaPath) {
-        this(fastaPath.toString());
+        this.fastaPath = fastaPath;
+        Logger.info(CLASS_NAME, "Reading fasta file: " + fastaPath);
     }
 
     public FastaReader(String fastaFile) {
-        this.fastaFile = fastaFile;
-        Logger.info(CLASS_NAME, "Reading fasta file: " + fastaFile);
+        this(Path.of(fastaFile));
     }
 
     @Override
@@ -40,20 +40,19 @@ public class FastaReader implements Iterable<Fasta>, AutoCloseable {
     }
 
     private class FastaIterator implements Iterator<Fasta>, AutoCloseable {
-        private BufferedReader reader;
         private String currentLine;
-        private StringBuilder sequenceBuilder;
         private int sequence_id;
+        private BufferedReader reader;
+        private StringBuilder sequenceBuilder;
 
         public FastaIterator() {
             try {
-                reader = new BufferedReader(new FileReader(fastaFile));
+                reader = FileUtils.reader(fastaPath);
                 currentLine = reader.readLine();
                 sequence_id = 0;
                 sequenceBuilder = new StringBuilder();
-            } catch (IOException e) {
-                Logger.error(CLASS_NAME, "Error opening file: " + fastaFile);
-                throw new RuntimeException("Error opening file: " + fastaFile, e);
+            } catch (Exception e) {
+                Logger.error(CLASS_NAME, "Error opening file: " + fastaPath);
             }
         }
 
@@ -69,9 +68,9 @@ public class FastaReader implements Iterable<Fasta>, AutoCloseable {
             }
 
             // Parse the header line (assume starts with ">")
-            String header = currentLine.substring(1);
-            String name = header.split(" ")[0];
-            String description = header.substring(name.length()).trim();
+            String header = currentLine.startsWith(">") ? currentLine.substring(1) : currentLine;
+            String name = header.split("\\s+")[0];
+            String description = header.length() > name.length() ? header.substring(name.length()).trim() : "";
             sequenceBuilder.setLength(0);
 
             try {
@@ -80,10 +79,9 @@ public class FastaReader implements Iterable<Fasta>, AutoCloseable {
                     sequenceBuilder.append(currentLine.trim());
                 }
             } catch (IOException e) {
-                throw new RuntimeException("Error reading file: " + fastaFile, e);
+                Logger.error(CLASS_NAME, "Error reading sequence data: " + e.getMessage());
             }
 
-            // Return a new Fasta object (assuming Fasta class implements Sequence)
             return new Fasta(sequence_id++, name, sequenceBuilder.toString(), description);
         }
 
