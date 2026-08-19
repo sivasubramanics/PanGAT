@@ -7,40 +7,70 @@ import edu.tamu.pg.pang2p.Utils.Logger;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 public class DependencyChecker {
 
+    private static final String CLASS_NAME = DependencyChecker.class.getSimpleName();
     private final List<String> requiredTools;
 
-    private static final String  CLASS_NAME = DependencyChecker.class.getSimpleName();
-
     public DependencyChecker() {
-        this.requiredTools = Defaults.TOOLS;
+        this(Defaults.TOOLS);
     }
 
     public DependencyChecker(List<String> requiredTools) {
-        this.requiredTools = new ArrayList<>(requiredTools);
+        Objects.requireNonNull(requiredTools, "requiredTools must not be null");
+        this.requiredTools = List.copyOf(requiredTools);
     }
 
+    /**
+     * Checks all configured required tools.
+     */
     public void check() throws IOException {
+        checkTools(this.requiredTools);
+    }
+
+    /**
+     * Checks a single tool.
+     */
+    public void check(String tool) throws IOException {
+        Objects.requireNonNull(tool, "tool must not be null");
+        checkTools(List.of(tool));
+    }
+
+    /**
+     * Core validation logic for checking a collection of tools.
+     */
+    public void checkTools(List<String> tools) throws IOException {
+        if (tools == null || tools.isEmpty()) {
+            return;
+        }
+
         List<String> missingTools = new ArrayList<>();
 
-        for (String tool : requiredTools) {
-            if (!HelperFunctions.isInstalled(tool)) {
-                missingTools.add(tool);
-                Logger.info(CLASS_NAME, "Tool \"" + tool + "\" is NOT installed.");
-            } else {
+        for (String tool : tools) {
+            if (HelperFunctions.isInstalled(tool)) {
                 Logger.info(CLASS_NAME, "Tool \"" + tool + "\" is installed.");
+            } else {
+                Logger.info(CLASS_NAME, "Tool \"" + tool + "\" is NOT installed.");
+                missingTools.add(tool);
             }
         }
 
         if (!missingTools.isEmpty()) {
-            String message = "Missing required tools: " + String.join(", ", missingTools)
-                    + ". Please install them and ensure they are available in your system PATH.";
+            boolean single = missingTools.size() == 1;
+            String message = String.format(
+                    "Missing required tool%s: %s. Please install %s and ensure %s available in your system PATH.",
+                    single ? "" : "s",
+                    String.join(", ", missingTools),
+                    single ? "it" : "them",
+                    single ? "it is" : "they are"
+            );
+
             Logger.error(CLASS_NAME, message);
             throw new IOException(message);
-        } else {
-            Logger.info(CLASS_NAME, "All required tools are installed.");
         }
+
+        Logger.info(CLASS_NAME, (tools.size() == 1 ? "Tool is" : "All required tools are") + " installed.");
     }
 }

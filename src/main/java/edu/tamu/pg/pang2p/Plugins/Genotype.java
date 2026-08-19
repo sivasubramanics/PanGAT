@@ -1,5 +1,6 @@
 package edu.tamu.pg.pang2p.Plugins;
 
+import edu.tamu.pg.pang2p.Tasks.Cohort;
 import edu.tamu.pg.pang2p.Tasks.DependencyChecker;
 import edu.tamu.pg.pang2p.Tasks.DirectoryStructure;
 import edu.tamu.pg.pang2p.Tasks.KmerCoverage;
@@ -97,6 +98,16 @@ public class Genotype implements Callable<Integer> , Runnable {
             KmerCoverage kmerCoverage = new KmerCoverage(referenceFile, sampleName, genotypeFiles.toArray(new Path[0]), outCovFile, kmerSize, threads, minCount, memory);
             kmerCoverage.run();
         }
+
+        String[] samples = samplePaths.keySet().toArray(new String[0]);
+        Path[] covFiles = new Path[samples.length];
+        for (int i = 0; i < samples.length; i++) {
+            covFiles[i] = dirs.getGenotypeDir().resolve(samples[i] + ".cov.tsv");
+        }
+
+        Cohort cohort = new Cohort(dirs.getPanClustersRepFile(), covFiles, samples, dirs.getCohortBase(), true);
+        cohort.run();
+
         return 0;
     }
 

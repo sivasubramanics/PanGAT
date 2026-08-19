@@ -23,7 +23,7 @@ public class PanCluster {
     public PanCluster(DirectoryStructure dirs) {
         this.singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
         this.clustersFile = singleCopyDir.resolve("clusters.tsv");
-        this.scrFile = dirs.getSingleCopyReference();
+        this.scrFile = dirs.getSingleCopyRawFile();
         this.nThreads = 2;
     }
 

@@ -55,7 +55,19 @@ public class DirectoryStructure {
         return baseDir.resolve(PipelineSteps.SINGLE_COPY.dirName()).resolve("pan_clusters.fasta");
     }
 
+    public Path getSingleCopyRawFile() {
+        return baseDir.resolve(PipelineSteps.SINGLE_COPY.dirName()).resolve("all_single_copy_regions.fasta");
+    }
+
     public Path getGenotypeDir() {
         return baseDir.resolve(PipelineSteps.GENOTYPING.dirName());
+    }
+
+    public Path getPanClustersRepFile() {
+        return baseDir.resolve(PipelineSteps.SINGLE_COPY.dirName()).resolve("pan_clusters_rep.tsv");
+    }
+
+    public String getCohortBase() {
+        return baseDir.resolve(PipelineSteps.GENOTYPING.dirName()).resolve("cohort").toString();
     }
 }

@@ -65,7 +65,10 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     @Override
     public Integer call() throws Exception {
 
-        Path outputDir = outputFile.getParent();
+        DependencyChecker dependencyChecker = new DependencyChecker();
+        dependencyChecker.check();
+
+        Path outputDir = outputFile.toAbsolutePath().getParent();
         if (outputDir != null && !Files.exists(outputDir)) {
             Files.createDirectories(outputDir);
         }
