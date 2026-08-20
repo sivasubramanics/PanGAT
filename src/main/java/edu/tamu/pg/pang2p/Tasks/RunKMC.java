@@ -4,6 +4,7 @@ import edu.tamu.pg.pang2p.Data.GenomeMap;
 import edu.tamu.pg.pang2p.Utils.*;
 
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 public class RunKMC {
@@ -76,6 +77,18 @@ public class RunKMC {
 
             Logger.info(CLASS_NAME, "Running KMC for genome: " + id);
             KMCExecutor.run(kmcConfig);
+        }
+    }
+
+    public void clean() {
+        Path kmcDir = dirs.getDirectory(PipelineSteps.KMC);
+        if (kmcDir != null && Files.exists(kmcDir)) {
+            try {
+                FileUtils.rmdir(kmcDir);
+                Logger.info(CLASS_NAME, "Cleaned up KMC directory: " + kmcDir);
+            } catch (IOException e) {
+                Logger.error(CLASS_NAME, "Failed to clean KMC directory: " + e.getMessage());
+            }
         }
     }
 }

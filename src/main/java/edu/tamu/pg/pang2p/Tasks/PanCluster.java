@@ -190,17 +190,27 @@ public class PanCluster {
             }
         }
 
-        Path kmcPrefix = singleCopyDir.resolve("pan_clusters");
-        KMCConfig kmcConfig = KMCConfig.builder()
-                .inputPath(panClustersFasta)
-                .outputPrefix(kmcPrefix)
-                .threads(nThreads)
-                .kmerSize(51)
-                .minCount(1)
-                .build();
+//        Path kmcPrefix = singleCopyDir.resolve("pan_clusters");
+//        KMCConfig kmcConfig = KMCConfig.builder()
+//                .inputPath(panClustersFasta)
+//                .outputPrefix(kmcPrefix)
+//                .threads(nThreads)
+//                .kmerSize(51)
+//                .minCount(1)
+//                .build();
+//
+//        Logger.info(CLASS_NAME, "Running KMC on pan_clusters fasta...");
+//        KMCExecutor.run(kmcConfig);
+        // clean up the intermediate files all_single_copy_regions.fasta, all_single_copy_regions.fasta.faidx, clusters.tsv, mmseqs_clustering.log, mmseqs_createDB.log
 
-        Logger.info(CLASS_NAME, "Running KMC on pan_clusters fasta...");
-        KMCExecutor.run(kmcConfig);
+
+        FileUtils.rmFile(singleCopyDir.resolve("mmseqs_clustering.log"));
+        FileUtils.rmFile(singleCopyDir.resolve("mmseqs_createDB.log"));
+        FileUtils.rmFile(singleCopyDir.resolve("clusters.tsv"));
+        FileUtils.rmFile(singleCopyDir.resolve("all_single_copy_regions.fasta"));
+        FileUtils.rmFile(singleCopyDir.resolve("all_single_copy_regions.fasta.faidx"));
+
+
     }
 
     /**

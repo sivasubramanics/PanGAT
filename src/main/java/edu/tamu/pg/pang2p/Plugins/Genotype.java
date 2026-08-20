@@ -53,9 +53,6 @@ public class Genotype implements Callable<Integer> , Runnable {
 
     @Override
     public Integer call() throws Exception {
-        // check if necessary tools are accessible
-        DependencyChecker dependencyChecker = new DependencyChecker();
-        dependencyChecker.check();
 
         // create directories under baseDir
         DirectoryStructure dirs = new DirectoryStructure(baseDir);
@@ -96,7 +93,7 @@ public class Genotype implements Callable<Integer> , Runnable {
             Set<Path> genotypeFiles = entry.getValue();
             Path outCovFile = dirs.getGenotypeDir().resolve(sampleName + ".cov.tsv");
             KmerCoverage kmerCoverage = new KmerCoverage(referenceFile, sampleName, genotypeFiles.toArray(new Path[0]), outCovFile, kmerSize, threads, minCount, memory);
-            kmerCoverage.run();
+            kmerCoverage.call();
         }
 
         String[] samples = samplePaths.keySet().toArray(new String[0]);

@@ -457,6 +457,7 @@ public class KMC implements AutoCloseable {
      */
     public void rmKMCfiles() {
         Logger.info(CLASS_NAME, "Removing KMC files");
+        this.close();
         FileUtils.rmFile(getKMCPrefixFile());
         FileUtils.rmFile(getKMCSuffixFile());
         if (getKMCLogFile() != null) {
@@ -478,7 +479,5 @@ public class KMC implements AutoCloseable {
             return null;
         }
     }
-
-
 }
 //EOF

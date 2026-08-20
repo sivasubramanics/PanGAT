@@ -34,9 +34,7 @@ public class ExtractSCR {
     public void run(GenomeMap genomesMap) throws IOException {
         try {
             run(genomesMap, minCount, minLength, 2);
-        } catch (ExecutionException e) {
-            throw new RuntimeException(e);
-        } catch (InterruptedException e) {
+        } catch (ExecutionException | InterruptedException e) {
             throw new RuntimeException(e);
         }
     }
@@ -62,8 +60,6 @@ public class ExtractSCR {
             for (Future<?> future : futures) {
                 future.get();
             }
-
-//            kmc.dumpKmerTable(kmcDir.resolve(genomeID + "_kmer_table.txt").toString());
             kmc.close();
 
             try (FastaWriter fastaWriter = new FastaWriter(singleCopyDir.resolve(genomeID + ".fasta").toString())) {

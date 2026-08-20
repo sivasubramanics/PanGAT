@@ -17,8 +17,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class FastaIndex implements AutoCloseable {
     private final Map<String, FastaIndexEntry> index;
     private final List<String> sequenceNames;
-    private final MappedByteBuffer fastaBuffer;         // <-- single mapping!
-    private final FileChannel fastaFileChannel;
+    private MappedByteBuffer fastaBuffer;
+    private FileChannel fastaFileChannel;
+    private File fastaFile;
     private final Object bufferLock = new Object();
     private final String CLASS_NAME = this.getClass().getSimpleName();
     private static final Set<Character> VALID_BASES = Set.of(
@@ -34,7 +35,7 @@ public class FastaIndex implements AutoCloseable {
     }
 
     public FastaIndex(String fastaFilePath) throws IOException {
-        File fastaFile = new File(fastaFilePath);
+        this.fastaFile = new File(fastaFilePath);
         String faiFilePath = fastaFilePath + ".faidx";
         File indexFile = new File(faiFilePath);
 
@@ -48,24 +49,34 @@ public class FastaIndex implements AutoCloseable {
         // Load sorted index
         this.index = sortByValue(Collections.unmodifiableMap(loadIndex(indexFile)));
         this.sequenceNames = Collections.unmodifiableList(new ArrayList<>(index.keySet()));
+    }
 
-        // Map the whole fasta file
-        FileChannel fc;
-        try {
-            RandomAccessFile raf = new RandomAccessFile(fastaFile, "r");
-            fc = raf.getChannel();
-            long fileSize = fc.size();
-            this.fastaFileChannel = fc;
-            if (fileSize > Integer.MAX_VALUE) {
-                Logger.info(CLASS_NAME, "Large FASTA file detected (>2GB), using RandomAccessFile (not memory-mapped).");
-                this.fastaBuffer = null; // We'll use RandomAccessFile directly later.
-            } else {
-                Logger.info(CLASS_NAME, "Memory mapping entire fasta file (size: " + fileSize + ")");
-                this.fastaBuffer = fc.map(FileChannel.MapMode.READ_ONLY, 0, fileSize);
+    /**
+     * Explicitly loads or memory-maps the FASTA file.
+     * Can be called manually, or will be called automatically when sequence extraction is requested.
+     */
+    public void loadToMemory() throws IOException {
+        synchronized (bufferLock) {
+            if (fastaFileChannel != null) {
+                return; // Already loaded/mapped
             }
-        } catch (IOException e) {
-            Logger.error(CLASS_NAME, "Error memory-mapping fasta file: " + e.getMessage());
-            throw e;
+
+            try {
+                RandomAccessFile raf = new RandomAccessFile(this.fastaFile, "r");
+                this.fastaFileChannel = raf.getChannel();
+                long fileSize = fastaFileChannel.size();
+
+                if (fileSize > Integer.MAX_VALUE) {
+                    Logger.info(CLASS_NAME, "Large FASTA file detected (>2GB), using RandomAccessFile (not memory-mapped).");
+                    this.fastaBuffer = null;
+                } else {
+                    Logger.info(CLASS_NAME, "Memory mapping entire fasta file (size: " + fileSize + ")");
+                    this.fastaBuffer = fastaFileChannel.map(FileChannel.MapMode.READ_ONLY, 0, fileSize);
+                }
+            } catch (IOException e) {
+                Logger.error(CLASS_NAME, "Error memory-mapping fasta file: " + e.getMessage());
+                throw e;
+            }
         }
     }
 
@@ -75,7 +86,7 @@ public class FastaIndex implements AutoCloseable {
             String line;
             int seqId = 0;
             while ((line = reader.readLine()) != null) {
-                String[] fields = line.split("\t", 6); // allow description to contain tabs
+                String[] fields = line.split("\t", 6);
                 String desc = (fields.length >= 6 && !fields[5].isEmpty()) ? fields[5] : null;
                 FastaIndexEntry entry = new FastaIndexEntry(seqId,
                         fields[0],
@@ -108,7 +119,8 @@ public class FastaIndex implements AutoCloseable {
     }
 
     /**
-     * Efficient random-access for subsequence, using single mapping/random access.
+     * Efficient random-access for subsequence.
+     * Auto-calls loadToMemory() if the sequence buffer is not open yet.
      */
     public String getSequence(String name, int start, int length) {
         FastaIndexEntry entry = getEntry(name);
@@ -126,6 +138,11 @@ public class FastaIndex implements AutoCloseable {
 
         synchronized (bufferLock) {
             try {
+                // Ensure file channel / buffer is ready
+                if (fastaFileChannel == null) {
+                    loadToMemory();
+                }
+
                 // get index info
                 long seqOffset = entry.getOffset();
                 int lineBases = entry.getLineBases();
@@ -134,7 +151,7 @@ public class FastaIndex implements AutoCloseable {
                 // calculate where in the file this region starts
                 int startLine = start / lineBases;
                 int startLineBaseIndex = start % lineBases;
-                long startOffsetInFile = seqOffset + ((long)startLine * lineWidth) + startLineBaseIndex;
+                long startOffsetInFile = seqOffset + ((long) startLine * lineWidth) + startLineBaseIndex;
 
                 int basesToExtract = end - start;
                 long curPosInFile = startOffsetInFile;
@@ -143,10 +160,9 @@ public class FastaIndex implements AutoCloseable {
                 while (basesToExtract > 0) {
                     int remainingBasesInLine = lineBases - curBaseInLine;
                     int basesToRead = Math.min(basesToExtract, remainingBasesInLine);
-                    // Read sequence chunk from file
-                    // If memory mapped:
+
                     if (fastaBuffer != null) {
-                        fastaBuffer.position((int)curPosInFile);
+                        fastaBuffer.position((int) curPosInFile);
                         for (int i = 0; i < basesToRead; i++) {
                             sequence.append((char) fastaBuffer.get());
                         }
@@ -155,10 +171,9 @@ public class FastaIndex implements AutoCloseable {
                         fastaFileChannel.position(curPosInFile);
                         int read = fastaFileChannel.read(java.nio.ByteBuffer.wrap(chunk));
                         for (int i = 0; i < read; i++) {
-                            sequence.append((char)chunk[i]);
+                            sequence.append((char) chunk[i]);
                         }
                     }
-                    // jump past newline chars
                     curPosInFile += basesToRead + (lineWidth - lineBases);
                     basesToExtract -= basesToRead;
                     curBaseInLine = 0;
@@ -178,8 +193,12 @@ public class FastaIndex implements AutoCloseable {
 
     @Override
     public void close() throws IOException {
-        if (fastaBuffer != null) fastaBuffer.clear();
-        if (fastaFileChannel != null) fastaFileChannel.close();
+        synchronized (bufferLock) {
+            if (fastaBuffer != null) fastaBuffer.clear();
+            if (fastaFileChannel != null && fastaFileChannel.isOpen()) {
+                fastaFileChannel.close();
+            }
+        }
     }
 
     public Fasta getFasta(String tr) {

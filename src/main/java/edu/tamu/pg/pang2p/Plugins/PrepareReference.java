@@ -67,6 +67,9 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs);
         extractSingleCopyRegions.run(genomeMap, minCount, minLength, threads);
 
+        // clean up KMC database files if not needed
+        runKMC.clean();
+
         // set commandline options for mmseqs2 clustering
         RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()
                 .threads(threads)

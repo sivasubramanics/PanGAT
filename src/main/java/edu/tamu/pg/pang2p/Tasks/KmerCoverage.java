@@ -127,7 +127,8 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
 
             // Final flush to guarantee zero data loss
             writer.flush();
-            System.out.print("\r");
+            System.out.print("\033[2K\r");
+            System.out.flush();
             if (!keepKmc) {
                 kmc.rmKMCfiles();
             }
