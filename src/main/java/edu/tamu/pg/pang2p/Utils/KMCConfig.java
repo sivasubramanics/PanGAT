@@ -86,6 +86,8 @@ public class KMCConfig {
     }
 
     public static class Builder {
+        private static final double AUTO_MEMORY = -1.0;
+
         private final List<Path> inputPaths = new ArrayList<>();
         private Path outputPrefix;
         private InputFormat inputFormat; // Auto-detected if null
@@ -93,7 +95,7 @@ public class KMCConfig {
         private int signatureLength = Defaults.SIGNATURE_LENGTH;
         private int minCount = Defaults.MIN_COUNT;
         private long maxCount = 1_000_000_000L;
-        private double maxMemory = Defaults.HEAPSIZE;
+        private double maxMemory = AUTO_MEMORY; // Set to auto-calculate by default
         private int threads = 1;
 
         public Builder inputPath(Path inputPath) {
@@ -147,6 +149,9 @@ public class KMCConfig {
             return this;
         }
 
+        /**
+         * Sets max memory in GB. Pass a negative value or 0 to let KMCConfig compute a safe dynamic default.
+         */
         public Builder maxMemory(double value) {
             this.maxMemory = value;
             return this;
@@ -179,7 +184,41 @@ public class KMCConfig {
                 }
             }
 
+            // Dynamically calculate memory if default/auto-mode is active
+            if (this.maxMemory <= 0) {
+                this.maxMemory = calculateSafeMemoryGB();
+            }
+
             return new KMCConfig(this);
+        }
+
+        /**
+         * Safely estimates memory (in GB) for KMC without over-allocating system/JVM heap resources.
+         */
+        /**
+         * Safely estimates memory (in GB) for KMC without over-allocating system/JVM heap resources.
+         */
+        private double calculateSafeMemoryGB() {
+            Runtime runtime = Runtime.getRuntime();
+
+            // Total available headroom before JVM max heap limit
+            long maxHeap = runtime.maxMemory();
+            long allocatedHeap = runtime.totalMemory();
+            long freeHeap = runtime.freeMemory();
+            long unallocatedHeap = maxHeap - allocatedHeap;
+            long availableHeadroomBytes = freeHeap + unallocatedHeap;
+
+            // Target 30% of remaining available JVM headroom for external KMC execution
+            double calculatedGB = (availableHeadroomBytes * 0.30) / (1024.0 * 1024.0 * 1024.0);
+
+            // KMC binary strictly requires a minimum of 2.0 GB (-m2)
+            double minMemoryGB = 2.0;
+            double maxMemoryGB = 8.0;
+
+            double finalMemory = Math.max(minMemoryGB, Math.min(calculatedGB, maxMemoryGB));
+
+            // Round to 1 decimal place (e.g., 2.5 GB)
+            return Math.round(finalMemory * 10.0) / 10.0;
         }
     }
 }

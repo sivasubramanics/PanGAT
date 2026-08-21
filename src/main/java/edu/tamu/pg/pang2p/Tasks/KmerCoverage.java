@@ -6,6 +6,7 @@ import picocli.CommandLine;
 import picocli.CommandLine.*;
 
 import java.io.BufferedWriter;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
@@ -29,21 +30,21 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     private Path outputFile;
 
     @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC", required = false, defaultValue = "31")
-    private int kmerSize;
+    private int kmerSize = 31;
 
-    @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing", required = false, defaultValue = "2")
-    private int threads;
+    @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing [2]", required = false)
+    private int threads = 2;
 
-    @Option(names = {"-m", "--min_count"}, description = "Minimum count for k-mer coverage calculation", required = false, defaultValue = "1")
-    private int minCount;
+    @Option(names = {"-m", "--min_count"}, description = "Minimum count for k-mer coverage calculation [1]", required = false)
+    private int minCount = 1;
 
-    @Option(names = {"--memory"}, description = "Should the kmc db loaded into memory", defaultValue = "false")
-    private boolean memory;
+    @Option(names = {"--memory"}, description = "Should the kmc db loaded into memory", required = false)
+    private boolean memory = false;
 
-    @Option(names = {"--keep-kmc"}, description = "Keep the KMC database files after processing", defaultValue = "false")
-    private boolean keepKmc;
+    @Option(names = {"--keep-kmc"}, description = "Keep the KMC database files after processing", required = false)
+    private boolean keepKmc = false;
 
-    private final String CLASS_NAME = KmerCoverage.class.getSimpleName();
+    private final String CLASS_NAME = this.getClass().getSimpleName();
     private static final int FLUSH_INTERVAL = 5000;
 
     // Default no-arg constructor required by PicoCLI
@@ -64,82 +65,111 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
 
     @Override
     public Integer call() throws Exception {
+        HelperFunctions.printCommandLine(new CommandLine(this), CLASS_NAME);
+        validateCMD();
 
         DependencyChecker dependencyChecker = new DependencyChecker();
         dependencyChecker.check();
+
+        calculateCoverage();
+        return 0;
+    }
+
+    @Override
+    public void run() {
+        try {
+            call();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /***
+     * Main function to execute the KMC database generation and k-mer coverage analysis
+     */
+    public void calculateCoverage() throws IOException {
+        sampleName = cleanSampleName(sampleName);
 
         Path outputDir = outputFile.toAbsolutePath().getParent();
         if (outputDir != null && !Files.exists(outputDir)) {
             Files.createDirectories(outputDir);
         }
 
+        HelperFunctions.printMemoryUsage("Before KMC run");
         KMCConfig kmcConfig = KMCConfig.builder()
                 .inputPaths(inputFiles)
                 .outputPrefix(outputDir.resolve(sampleName))
                 .kmerSize(kmerSize)
-                .threads(threads)
+                .threads(threads - 1)
                 .minCount(1)
                 .build();
         KMCExecutor.run(kmcConfig);
+        HelperFunctions.printMemoryUsage("After KMC run");
 
         FastaIndex fastaIndex = new FastaIndex(referenceFasta);
-        if (fastaIndex.length() == 0) {
+        int totalSequences = fastaIndex.length();
+        if (totalSequences == 0) {
             Logger.info(CLASS_NAME, "No sequences found in reference file: " + referenceFasta);
-            return 0;
+            fastaIndex.close();
+            return;
         }
+        HelperFunctions.printMemoryUsage("After FastaIndex");
 
-        Logger.info(CLASS_NAME, "Processing " + fastaIndex.length() + " sequences across " + threads + " threads...");
+        Logger.info(CLASS_NAME, "Processing " + totalSequences + " sequences across " + threads + " threads...");
 
         ExecutorService executor = Executors.newFixedThreadPool(threads);
+        ExecutorCompletionService<Void> completionService = new ExecutorCompletionService<>(executor);
 
-        // Semaphore to bound memory usage by queuing only up to (2 * threads) tasks at a time
-        Semaphore queueBound = new Semaphore(threads * 2);
-
-        AtomicInteger processedSequences = new AtomicInteger(0);
+        AtomicInteger completedSequences = new AtomicInteger(0);
         AtomicInteger writeCounter = new AtomicInteger(0);
 
+        KMC kmc = new KMC(outputDir.resolve(sampleName).toString(), memory);
+        HelperFunctions.printMemoryUsage("After KMC load");
+
         try (BufferedWriter writer = Files.newBufferedWriter(outputFile);
-             KMC kmc = new KMC(outputDir.resolve(sampleName).toString(), memory);
              FastaReader fastaReader = new FastaReader(referenceFasta)) {
 
             for (Fasta scr : fastaReader) {
-                queueBound.acquire();
-
-                executor.submit(() -> {
-                    try {
-                        processFastaRecord(scr, kmc, writer, writeCounter);
-                    } finally {
-                        queueBound.release();
-                        int completed = processedSequences.incrementAndGet();
-                        if (completed % 1000 == 0) {
-                            double percentage = ((double) completed / fastaIndex.length()) * 100.0;
-                            Logger.progress(CLASS_NAME, String.format("Processed %d/%d sequences (%.2f%%)", completed, fastaIndex.length(), percentage));
-                        }
+                completionService.submit(() -> {
+                    processFastaRecord(scr, kmc, writer, writeCounter);
+                    int completed = completedSequences.incrementAndGet();
+                    float progress = (float) (completed * 100) / totalSequences;
+                    synchronized (System.out) {
+                        System.out.printf("\rProgress: %.2f%%", progress);
                     }
+                    return null;
                 });
             }
 
-            // Shutdown executor and wait for running tasks to complete
-            executor.shutdown();
-            if (!executor.awaitTermination(7, TimeUnit.DAYS)) {
-                executor.shutdownNow();
+            for (int i = 0; i < totalSequences; i++) {
+                try {
+                    completionService.take().get();
+                } catch (Exception e) {
+                    Logger.error(CLASS_NAME, "Error during task execution: " + e.getMessage());
+                }
             }
 
-            // Final flush to guarantee zero data loss
-            writer.flush();
-            System.out.print("\033[2K\r");
+            // Clear progress line on console
+            System.out.print("\r");
+            for (int i = 0; i < 100; i++) {
+                System.out.print(" ");
+            }
+            System.out.print("\r");
             System.out.flush();
-            if (!keepKmc) {
-                kmc.rmKMCfiles();
-            }
-            Logger.info(CLASS_NAME, "Successfully completed k-mer coverage calculation for " + sampleName);
 
+            writer.flush();
+            Logger.info(CLASS_NAME, "Successfully completed k-mer coverage calculation for " + sampleName);
         } catch (Exception e) {
             Logger.error(CLASS_NAME, "Error during KmerCoverage processing: " + e.getMessage());
+        } finally {
             executor.shutdownNow();
         }
 
-        return 0;
+        HelperFunctions.printMemoryUsage("After KmerCoverage");
+
+        if (!keepKmc) {
+            kmc.rmKMCfiles();
+        }
     }
 
     /**
@@ -152,7 +182,6 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         int obsKmers = 0;
         int obsTotalKmers = 0;
 
-        // Sequence-local HashSet (instantiated & garbage collected per task execution)
         Set<Kmer> walkedKmers = new HashSet<>();
 
         while (it.hasNext()) {
@@ -160,7 +189,6 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
             Kmer kmer = kp.getKmer();
             totalKmers++;
 
-            // Fast presence check & addition in one step
             if (!walkedKmers.add(kmer)) {
                 continue;
             }
@@ -175,7 +203,6 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         int uniqKmers = walkedKmers.size();
         String resultLine = scr.getName() + "\t" + scr.getLength() + "\t" + uniqKmers + "\t" + totalKmers + "\t" + obsKmers + "\t" + obsTotalKmers + "\n";
 
-        // Thread-safe writing and batch disk flushing
         synchronized (writer) {
             try {
                 writer.write(resultLine);
@@ -183,18 +210,31 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
                     writer.flush();
                 }
             } catch (Exception e) {
-                throw new RuntimeException("Failed to write output record: " + scr.getName(), e);
+                Logger.error(CLASS_NAME, "Failed to write output record for sequence: " + scr.getName());
             }
         }
     }
 
-    @Override
-    public void run() {
-        try {
-            HelperFunctions.printCommandLine(new CommandLine(this), CLASS_NAME);
-            call();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+    /***
+     * Validate command line input options
+     */
+    private void validateCMD() {
+        if (threads <= 1) {
+            Logger.error(CLASS_NAME, "Number of threads should be greater than 1");
         }
+        if (minCount < 1) {
+            Logger.error(CLASS_NAME, "Minimum kmer count should be at least 1");
+        }
+        if (kmerSize <= 0 && kmerSize % 2 == 0) {
+            Logger.error(CLASS_NAME, "K-mer size should be greater than 0 and odd");
+        }
+    }
+
+    private String cleanSampleName(String sampleName) {
+        String sanitized = sampleName.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (!sanitized.equals(sampleName)) {
+            Logger.warning(CLASS_NAME, "Sample name contains invalid characters, changed to: " + sanitized);
+        }
+        return sanitized;
     }
 }

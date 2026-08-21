@@ -414,12 +414,38 @@ public class KMC implements AutoCloseable {
 
     @Override
     public void close() {
+        if (threadLocalBuffers != null) {
+            threadLocalBuffers.remove(); // Clear ThreadLocal for the calling thread
+            threadLocalBuffers = null;
+        }
+
         if (suffixBuffers != null) {
+            for (MappedByteBuffer buffer : suffixBuffers) {
+                unmap(buffer);
+            }
             Arrays.fill(suffixBuffers, null);
         }
         suffixBuffers = null;
         prefixArray = null;
         signatureMap = null;
+        inMemorySuffixBuffers = null;
+    }
+
+    private static void unmap(MappedByteBuffer buffer) {
+        if (buffer == null) return;
+        try {
+            // Cleaning DirectByteBuffer via reflection (works across standard JDKs)
+            java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+            cleanerMethod.setAccessible(true);
+            Object cleaner = cleanerMethod.invoke(buffer);
+            if (cleaner != null) {
+                java.lang.reflect.Method cleanMethod = cleaner.getClass().getMethod("clean");
+                cleanMethod.setAccessible(true);
+                cleanMethod.invoke(cleaner);
+            }
+        } catch (Exception ignored) {
+            // Best effort cleanup
+        }
     }
 
     /***
@@ -457,7 +483,9 @@ public class KMC implements AutoCloseable {
      */
     public void rmKMCfiles() {
         Logger.info(CLASS_NAME, "Removing KMC files");
-        this.close();
+        if (suffixBuffers != null) {
+            this.close();
+        }
         FileUtils.rmFile(getKMCPrefixFile());
         FileUtils.rmFile(getKMCSuffixFile());
         if (getKMCLogFile() != null) {

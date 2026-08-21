@@ -358,5 +358,62 @@ public class HelperFunctions {
     public static String floatFormat(double v) {
         return String.format("%." + Defaults.FLOAT_DIGITS + "f", v);
     }
+
+
+    public static void printMemoryUsage(String label) {
+        Runtime runtime = Runtime.getRuntime();
+
+        long max = runtime.maxMemory();
+        long total = runtime.totalMemory();
+        long free = runtime.freeMemory();
+        long used = total - free;
+
+        Logger.info("Memory",
+                String.format(
+                        "%s | JVM heap: used=%s, allocated=%s, free=%s, max=%s",
+                        label,
+                        formatBytes(used),
+                        formatBytes(total),
+                        formatBytes(free),
+                        formatBytes(max)
+                ));
+
+        // Linux process resident memory (includes native memory such as KMC)
+        try {
+            Path status = Path.of("/proc/self/status");
+
+            if (Files.exists(status)) {
+                for (String line : Files.readAllLines(status)) {
+                    if (line.startsWith("VmRSS:")) {
+                        String rss = line.replace("VmRSS:", "").trim();
+                        Logger.info("Memory",
+                                String.format("%s | Process RSS: %s", label, rss));
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Ignore if /proc is unavailable
+        }
+    }
+
+    private static String formatBytes(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+
+        double kb = bytes / 1024.0;
+        if (kb < 1024) {
+            return String.format("%.2f KB", kb);
+        }
+
+        double mb = kb / 1024.0;
+        if (mb < 1024) {
+            return String.format("%.2f MB", mb);
+        }
+
+        double gb = mb / 1024.0;
+        return String.format("%.2f GB", gb);
+    }
 }
 // EOF

@@ -194,9 +194,55 @@ public class FastaIndex implements AutoCloseable {
     @Override
     public void close() throws IOException {
         synchronized (bufferLock) {
-            if (fastaBuffer != null) fastaBuffer.clear();
+            // 1. Explicitly unmap native memory buffer
+            if (fastaBuffer != null) {
+                unmap(fastaBuffer);
+                fastaBuffer = null;
+            }
+
+            // 2. Close the underlying file channel
             if (fastaFileChannel != null && fastaFileChannel.isOpen()) {
                 fastaFileChannel.close();
+                fastaFileChannel = null;
+            }
+
+            // 3. Nullify large internal index data structures
+            if (index instanceof Map) {
+                try {
+                    // Handle immutable wrapping cleanly if needed
+                    index.clear();
+                } catch (UnsupportedOperationException ignored) {}
+            }
+        }
+    }
+
+    /**
+     * Helper method to immediately release MappedByteBuffer off-heap memory.
+     */
+    private static void unmap(MappedByteBuffer buffer) {
+        if (buffer == null) return;
+        try {
+            // Direct byte buffer cleaner invocation via reflection
+            java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+            cleanerMethod.setAccessible(true);
+            Object cleaner = cleanerMethod.invoke(buffer);
+            if (cleaner != null) {
+                java.lang.reflect.Method cleanMethod = cleaner.getClass().getMethod("clean");
+                cleanMethod.setAccessible(true);
+                cleanMethod.invoke(cleaner);
+            }
+        } catch (Exception e) {
+            // Direct buffer cleanup fallback for modern Java runtimes (JDK 9+)
+            try {
+                Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+                java.lang.reflect.Field unsafeField = unsafeClass.getDeclaredField("theUnsafe");
+                unsafeField.setAccessible(true);
+                Object unsafe = unsafeField.get(null);
+                java.lang.reflect.Method invokeCleaner = unsafeClass.getMethod("invokeCleaner", java.nio.ByteBuffer.class);
+                invokeCleaner.invoke(unsafe, buffer);
+            } catch (Exception ignored) {
+                // If reflection is restricted, normal GC will clean up the buffer later
+                Logger.error("FastaIndex", "Unable to unmap MappedByteBuffer. It will be cleaned up by GC later.");
             }
         }
     }
