@@ -78,6 +78,8 @@ public class Cohort implements Runnable, Callable<Integer> {
         // Optional: Add parameters to metadata
         panHap.addParameter("cvCutoff", String.valueOf(cvCutoff));
 
+        panHap.addParameter("numHaps", String.valueOf(panHap.getHapNum()));
+
         for (int i = 0; i < input.length; i++) {
             panHap.addSample(samples[i], input[i]);
         }

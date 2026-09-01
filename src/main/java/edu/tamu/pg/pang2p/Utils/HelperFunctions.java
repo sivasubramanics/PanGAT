@@ -415,5 +415,21 @@ public class HelperFunctions {
         double gb = mb / 1024.0;
         return String.format("%.2f GB", gb);
     }
+
+    public static int alphaToInt(String s, int chromCodeLength) {
+        if (s.length() != chromCodeLength) {
+            throw new IllegalArgumentException("Input string must be of length " + chromCodeLength);
+        }
+        int base = 26;
+        int result = 0;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c < 'a' || c > 'z') {
+                throw new IllegalArgumentException("Invalid character: " + c + ". Only 'a'-'z' are allowed.");
+            }
+            result = result * base + (c - 'a');
+        }
+        return result;
+    }
 }
 // EOF

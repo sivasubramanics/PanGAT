@@ -286,4 +286,8 @@ public class PanHap {
     public void writePanMatrix(Path panMatrixFile) {
         writePanMatrix(panMatrixFile, 0.0);
     }
+
+    public int getHapNum() {
+        return hapData.size();
+    }
 }
