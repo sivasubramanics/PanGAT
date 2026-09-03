@@ -4,6 +4,7 @@ import edu.tamu.pg.pang2p.Utils.Defaults;
 import edu.tamu.pg.pang2p.Utils.FileUtils;
 import edu.tamu.pg.pang2p.Utils.HelperFunctions;
 import edu.tamu.pg.pang2p.Utils.Logger;
+import picocli.CommandLine;
 import picocli.CommandLine.*;
 
 import java.io.*;
@@ -21,178 +22,341 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
     @Option(names = {"-o", "--outprefix"}, description = "Prefix for output files.", required = true)
     private String outPrefix;
 
-    @Option(names = {"-g", "--genotypes"}, description = "File with list of genotype IDs to include in the output.", required = false)
-    private Path genotypeIdsFile;
+    @Option(names = {"-i", "--include"}, description = "File with list of genotype IDs to include in the output.", required = false)
+    private Path includeGenotypeIdsFile;
+
+    @Option(names = {"-e", "--exclude"}, description = "File with list of genotype IDs to exclude from the output.", required = false)
+    private Path excludeGenotypeIdsFile;
+
+    @Option(names = {"--min-maf"}, description = "Minimum minor allele frequency for filtering markers [0.05]", required = false, defaultValue = "0.05")
+    private double minMAF = 0.05;
+
+    @Option(names = {"--max-missing-marker"}, description = "Maximum missing data proportion for filtering markers [0.1]", required = false, defaultValue = "0.1")
+    private double maxMissingMarker = 0.1;
+
+    @Option(names = {"--max-heterozygosity"}, description = "Maximum heterozygosity for filtering markers [0.5]", required = false, defaultValue = "0.5")
+    private double maxHeterozygosity = 0.5;
+
+    @Option(names = {"--cv"}, description = "CV cutoff for filtering markers [0.0]", required = false, defaultValue = "0.0")
+    private double cvCutoff = 0.0;
+
+    @Option(names = {"--gapit"}, description = "Convert output to GAPIT format (requires R and GAPIT installed).", required = false, defaultValue = "false")
+    private boolean gapit = false;
 
     private final String CLASS_NAME = ExportMatrix.class.getSimpleName();
 
     public ExportMatrix() {
     }
 
-    public ExportMatrix(Path panMatrixFile, String outPrefix, Path genotypeIdsFile) {
+    public ExportMatrix(Path panMatrixFile, String outPrefix) {
         this.panMatrixFile = panMatrixFile;
         this.outPrefix = outPrefix;
-        this.genotypeIdsFile = genotypeIdsFile;
     }
 
     @Override
     public Integer call() throws Exception {
-        Set<String> targetGenotypeIDs = new HashSet<>();
-        if (genotypeIdsFile != null) {
-            targetGenotypeIDs = getGenotypeIDs(genotypeIdsFile);
-        }
-
-        Path tempDir = Files.createTempDirectory("pang2p_transpose_");
-        List<BufferedWriter> tempWriters = new ArrayList<>();
-        List<Path> tempFiles = new ArrayList<>();
-        List<String> selectedSampleNames = new ArrayList<>();
-        List<String> markerIDs = new ArrayList<>();
-
-        String genoFile = outPrefix + "_genotypes.tsv";
-        String mapFile = outPrefix + "_map.tsv";
+        HelperFunctions.printCommandLine(new CommandLine(this), CLASS_NAME);
+        validateInputs();
 
         try (BufferedReader reader = FileUtils.reader(panMatrixFile);
-             BufferedWriter mapWriter = FileUtils.writer(mapFile)) {
-
-            // Write header for the map file
-            mapWriter.write("Name\tChromosome\tPosition");
-            mapWriter.newLine();
+             BufferedWriter writer = FileUtils.writer(outPrefix + ".genotype.tsv")) {
 
             String line;
+            Set<String> includeGenotypes = loadGenotypeSet(includeGenotypeIdsFile);
+            Set<String> excludeGenotypes = loadGenotypeSet(excludeGenotypeIdsFile);
+
+            // Handle overlap prioritizing include list
+            if (includeGenotypes != null && excludeGenotypes != null) {
+                Set<String> overlap = new HashSet<>(excludeGenotypes);
+                overlap.retainAll(includeGenotypes);
+                for (String genotypeId : overlap) {
+                    Logger.warning(CLASS_NAME, "Genotype ID " + genotypeId + " is present in both include and exclude lists. It will be included.");
+                }
+                excludeGenotypes.removeAll(overlap);
+            }
+
+            int[] targetIndices = null;
+            int totalSamplesInHeader = 0;
+            int totalMarkers = 0;
+            int failedMAF = 0;
+            int failedMissingMarker = 0;
+            int failedHeterozygosity = 0;
+            int failedCV = 0;
+            int filteredMarkers = 0;
+
+            // Global genotype counters across retained markers
+            long globalMissing = 0, globalHomRef = 0, globalHet = 0, globalHomAlt = 0;
+
+            StringBuilder outLine = new StringBuilder(1024);
 
             while ((line = reader.readLine()) != null) {
-                if (line.startsWith("##")) continue;
-
-                List<String> fields = splitByTab(line);
+                line = line.trim();
+                if (line.isEmpty() || line.startsWith("##")) continue;
 
                 if (line.startsWith("#")) {
-                    if (fields.size() < 14) {
-                        Logger.error(CLASS_NAME, "Invalid header format in input file.");
-                        return 1;
+                    String[] header = line.split("\t");
+                    totalSamplesInHeader = header.length - 13;
+
+                    List<Integer> indexList = new ArrayList<>();
+                    for (int i = 13; i < header.length; i++) {
+                        String genotypeId = header[i];
+                        if (includeGenotypes != null && !includeGenotypes.contains(genotypeId)) continue;
+                        if (excludeGenotypes != null && excludeGenotypes.contains(genotypeId)) continue;
+                        indexList.add(i);
                     }
 
-                    // Create disk buffers for each genotype/sample
-                    for (int i = 13; i < fields.size(); i++) {
-                        String sample = fields.get(i);
-                        if (targetGenotypeIDs.isEmpty() || targetGenotypeIDs.contains(sample)) {
-                            selectedSampleNames.add(sample);
-                            Path tempFile = tempDir.resolve("sample_" + (i - 13) + ".tmp");
-                            tempFiles.add(tempFile);
-                            BufferedWriter bw = Files.newBufferedWriter(tempFile);
-                            bw.write(sample); // Write Sample ID as row head
-                            tempWriters.add(bw);
-                        } else {
-                            tempWriters.add(null); // Ignored genotype marker slot
-                        }
+                    targetIndices = indexList.stream().mapToInt(Integer::intValue).toArray();
+
+                    // Write header
+                    outLine.append("ID\tCHR\tSTART\tEND");
+                    for (int idx : targetIndices) {
+                        outLine.append("\t").append(header[idx]);
                     }
+                    outLine.append("\n");
+                    writer.write(outLine.toString());
+                    outLine.setLength(0);
                     continue;
                 }
 
-                if (tempWriters.isEmpty()) {
-                    Logger.error(CLASS_NAME, "Data row encountered before header row (#).");
-                    return 1;
+                String[] tokens = line.split("\t");
+                if (tokens.length < 2 || targetIndices == null) continue;
+
+                totalMarkers++;
+
+                // Fast CV check
+                boolean cvFailed = Double.parseDouble(tokens[12]) < cvCutoff;
+                if (cvFailed) {
+                    failedCV++;
                 }
 
-                String markerID = fields.get(0);
-                int chrom = HelperFunctions.alphaToInt(fields.get(3), Defaults.CHROM_CODE_LENGTH) + 1;
-                String pos = fields.get(4);
+                // Compute stats on genotype data independently
+                MarkerStats stats = new MarkerStats(tokens, targetIndices);
 
-                markerIDs.add(markerID);
-
-                // Export marker details to the map file stream
-                mapWriter.write(markerID + "\t" + chrom + "\t" + pos);
-                mapWriter.newLine();
-
-                // Stream genotype calls directly to individual temporary files
-                for (int i = 13; i < fields.size(); i++) {
-                    BufferedWriter bw = tempWriters.get(i - 13);
-                    if (bw != null) {
-                        String fieldVal = fields.get(i);
-                        int colonPos = fieldVal.indexOf(':');
-                        String genotypeVal = (colonPos != -1) ? fieldVal.substring(0, colonPos) : fieldVal;
-
-                        bw.write('\t');
-                        bw.write(genotypeVal);
-                    }
+                if (stats.missingProportion() > maxMissingMarker) {
+                    failedMissingMarker++;
+                    stats.setGood(false);
                 }
-            }
-
-            // Close all sample buffer streams
-            for (BufferedWriter bw : tempWriters) {
-                if (bw != null) bw.close();
-            }
-
-            Logger.info(CLASS_NAME, "Writing final genotype matrix file...");
-
-            try (BufferedWriter finalWriter = FileUtils.writer(genoFile)) {
-                // Header row: Genotype followed by Marker IDs
-                finalWriter.write("taxa\t" + String.join("\t", markerIDs));
-                finalWriter.newLine();
-
-                // Append each sample's transposed row to final output file
-                for (Path tempFile : tempFiles) {
-                    try (BufferedReader tempReader = Files.newBufferedReader(tempFile)) {
-                        String tempLine;
-                        while ((tempLine = tempReader.readLine()) != null) {
-                            finalWriter.write(tempLine);
-                            finalWriter.newLine();
-                        }
-                    }
+                if (stats.maf() < minMAF) {
+                    failedMAF++;
+                    stats.setGood(false);
                 }
+                if (stats.heterozygosity() > maxHeterozygosity) {
+                    failedHeterozygosity++;
+                    stats.setGood(false);
+                }
+
+                // If any filter failed (including CV), skip writing this marker
+                if (cvFailed || !stats.isGood()) {
+                    continue;
+                }
+
+                // Retained marker stats accumulation
+                filteredMarkers++;
+                globalMissing += stats.alleleCounts[0];
+                globalHomRef += stats.alleleCounts[1];
+                globalHet += stats.alleleCounts[2];
+                globalHomAlt += stats.alleleCounts[3];
+
+                outLine.append(tokens[0]).append("\t")  // ID
+                        .append(HelperFunctions.alphaToInt(tokens[3], Defaults.CHROM_CODE_LENGTH) + 1).append("\t")  // CHR
+                        .append(tokens[4]).append("\t")  // Start
+                        .append(tokens[5]);              // End
+                for (int gt : stats.gtData) {
+                    outLine.append("\t").append(gt);
+                }
+                outLine.append("\n");
+                writer.write(outLine.toString());
+                outLine.setLength(0);
             }
 
-            Logger.info(CLASS_NAME, "Export completed successfully. Map and genotype matrices created.");
+            // Summary Logs
+            int failedTotal = totalMarkers - filteredMarkers;
+            double retainPct = totalMarkers > 0 ? (filteredMarkers * 100.0 / totalMarkers) : 0.0;
 
+            Logger.info(CLASS_NAME, "-------------------- Sample Summary --------------------");
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d", "Total samples", totalSamplesInHeader));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d", "Retained samples", targetIndices != null ? targetIndices.length : 0));
+
+            Logger.info(CLASS_NAME, "-------------------- Marker Filters --------------------");
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d", "Total markers input", totalMarkers));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed CV (< %.2f)", cvCutoff), failedCV));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed missing (> %.2f)", maxMissingMarker), failedMissingMarker));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed MAF (< %.2f)", minMAF), failedMAF));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed het (> %.2f)", maxHeterozygosity), failedHeterozygosity));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d", "Total markers removed", failedTotal));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Passed markers", filteredMarkers, retainPct));
+
+            Logger.info(CLASS_NAME, "------------------ Genotype Distribution ---------------");
+            long totalCalls = globalHomRef + globalHet + globalHomAlt + globalMissing;
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Hom Ref (0)", globalHomRef, totalCalls > 0 ? (globalHomRef * 100.0 / totalCalls) : 0));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Het (1)", globalHet, totalCalls > 0 ? (globalHet * 100.0 / totalCalls) : 0));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Hom Alt (2)", globalHomAlt, totalCalls > 0 ? (globalHomAlt * 100.0 / totalCalls) : 0));
+            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Missing (-1)", globalMissing, totalCalls > 0 ? (globalMissing * 100.0 / totalCalls) : 0));
+            Logger.info(CLASS_NAME, "--------------------------------------------------------");
+
+            writer.flush();
         } catch (Exception e) {
-            Logger.error(CLASS_NAME, "Error processing matrix: " + e.getMessage());
-            return 1;
-        } finally {
-            // Clean up temporary files
-            for (Path tempFile : tempFiles) {
-                Files.deleteIfExists(tempFile);
-            }
-            Files.deleteIfExists(tempDir);
+            throw new RuntimeException(e);
         }
 
+        // Run GAPIT conversion outside try-with-resources to guarantee file handles are closed
+        if (gapit) {
+            convertGTtoGAPIT();
+        }
         return 0;
-    }
-
-    private static List<String> splitByTab(String line) {
-        List<String> list = new ArrayList<>();
-        int start = 0;
-        int end;
-        while ((end = line.indexOf('\t', start)) != -1) {
-            list.add(line.substring(start, end));
-            start = end + 1;
-        }
-        list.add(line.substring(start));
-        return list;
     }
 
     @Override
     public void run() {
         try {
-            int exitCode = call();
-            if (exitCode != 0) System.exit(exitCode);
+            call();
         } catch (Exception e) {
             e.printStackTrace();
-            System.exit(1);
         }
     }
 
-    private Set<String> getGenotypeIDs(Path genotypeIdsFile) throws IOException {
-        Set<String> genotypeIDs = new HashSet<>();
-        try (BufferedReader reader = FileUtils.reader(genotypeIdsFile)) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (!line.trim().isEmpty()) {
-                    genotypeIDs.add(line.trim());
+    private Set<String> loadGenotypeSet(Path path) throws IOException {
+        if (path != null && Files.exists(path)) {
+            return new HashSet<>(Arrays.asList(FileUtils.fileToArray(path)));
+        }
+        return null;
+    }
+
+    private void validateInputs() {
+        if (!Files.exists(panMatrixFile)) {
+            throw new IllegalArgumentException("Pan-genome matrix file does not exist: " + panMatrixFile);
+        }
+        if (outPrefix == null || outPrefix.isEmpty()) {
+            throw new IllegalArgumentException("Output prefix must be specified.");
+        }
+    }
+
+    private static class MarkerStats {
+        final int[] gtData;
+        final int[] alleleCounts = new int[4]; // [missing, hom_ref, het, hom_alt]
+        final double maf;
+        final double missingProportion;
+        final double heterozygosity;
+        boolean isGood = true;
+
+        MarkerStats(String[] tokens, int[] targetIndices) {
+            this.gtData = new int[targetIndices.length];
+
+            for (int i = 0; i < targetIndices.length; i++) {
+                String val = tokens[targetIndices[i]];
+                int colonIdx = val.indexOf(':');
+                String gtStr = (colonIdx != -1) ? val.substring(0, colonIdx) : val;
+                int gt = Integer.parseInt(gtStr);
+                this.gtData[i] = gt;
+
+                switch (gt) {
+                    case -1 -> alleleCounts[0]++;
+                    case 0 -> alleleCounts[1]++;
+                    case 1 -> alleleCounts[2]++;
+                    case 2 -> alleleCounts[3]++;
+                    default -> throw new IllegalArgumentException("Unexpected genotype value: " + gt);
                 }
             }
-        } catch (Exception e) {
-            Logger.error(CLASS_NAME, "Error reading genotype IDs file: " + e.getMessage());
-            throw e;
+
+            int total = gtData.length;
+            int nonMissingCount = total - alleleCounts[0];
+
+            this.missingProportion = (double) alleleCounts[0] / total;
+            this.maf = nonMissingCount == 0 ? 0.0 : Math.min((double) alleleCounts[1] / nonMissingCount, (double) alleleCounts[3] / nonMissingCount);
+            this.heterozygosity = nonMissingCount == 0 ? 0.0 : (double) alleleCounts[2] / nonMissingCount;
         }
-        return genotypeIDs;
+
+        void setGood(boolean good) {
+            this.isGood = good;
+        }
+
+        boolean isGood() {
+            return isGood;
+        }
+
+        double maf() {
+            return maf;
+        }
+
+        double missingProportion() {
+            return missingProportion;
+        }
+
+        double heterozygosity() {
+            return heterozygosity;
+        }
+    }
+
+    private void convertGTtoGAPIT() {
+        Logger.info(CLASS_NAME, "Converting genotype matrix to GAPIT format via temporary RScript...");
+
+        File tempScript = null;
+        try {
+            // 1. Create temporary script
+            tempScript = File.createTempFile("convertGTmatrixToRdata_", ".R");
+
+            // 2. Write R execution logic to temp file
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempScript))) {
+                writer.write(String.format(
+                        "gt <- read.table('%s.genotype.tsv', header = TRUE, check.names = FALSE)\n" +
+                                "\n" +
+                                "# 1. Extract Genotype Map (GM)\n" +
+                                "GM <- data.frame(\n" +
+                                "  Name = gt$ID,\n" +
+                                "  Chromosome = gt$CHR,\n" +
+                                "  Position = gt$START,\n" +
+                                "  stringsAsFactors = FALSE\n" +
+                                ")\n" +
+                                "\n" +
+                                "# 2. Extract Genotype Data (GD)\n" +
+                                "gt_matrix <- as.matrix(gt[, 5:ncol(gt)])\n" +
+                                "rownames(gt_matrix) <- gt$ID\n" +
+                                "GD_transposed <- t(gt_matrix)\n" +
+                                "\n" +
+                                "GD <- data.frame(\n" +
+                                "  Taxa = rownames(GD_transposed),\n" +
+                                "  GD_transposed,\n" +
+                                "  row.names = NULL,\n" +
+                                "  check.names = FALSE,\n" +
+                                "  stringsAsFactors = FALSE\n" +
+                                ")\n" +
+                                "\n" +
+                                "# 3. Save output files\n" +
+                                "save(GD, GM, file = '%s.GAPIT.RData')\n" +
+                                "# write.table(GM, '%s.map.tsv', sep = '\\t', quote = FALSE, row.names = FALSE)\n" +
+                                "# write.table(GD, '%s.gt.tsv', sep = '\\t', quote = FALSE, row.names = FALSE)\n",
+                        outPrefix, outPrefix, outPrefix, outPrefix
+                ));
+            } // Writer flushes and closes HERE before Rscript runs
+
+            // 3. Run ProcessBuilder to capture R output and errors directly
+            ProcessBuilder pb = new ProcessBuilder("Rscript", tempScript.getAbsolutePath());
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
+
+            try (BufferedReader rReader = new BufferedReader(new InputStreamReader(proc.getInputStream()))) {
+                String rLine;
+                while ((rLine = rReader.readLine()) != null) {
+                    Logger.info(CLASS_NAME, "[Rscript] " + rLine);
+                }
+            }
+
+            int exitCode = proc.waitFor();
+            if (exitCode == 0) {
+                Logger.info(CLASS_NAME, "Successfully generated GAPIT file with GD and GM objects (.GAPIT.RData)");
+            } else {
+                Logger.error(CLASS_NAME, "Rscript exited with non-zero code: " + exitCode);
+            }
+
+        } catch (IOException e) {
+            Logger.error(CLASS_NAME, "Failed to create or write temporary R script: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Logger.error(CLASS_NAME, "Rscript execution was interrupted: " + e.getMessage());
+            Thread.currentThread().interrupt();
+        } finally {
+            if (tempScript != null && tempScript.exists()) {
+                tempScript.delete();
+            }
+        }
     }
 }

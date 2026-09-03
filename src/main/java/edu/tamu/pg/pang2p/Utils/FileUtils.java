@@ -216,4 +216,9 @@ public class FileUtils {
     public static BufferedWriter writer(String filePath) throws IOException {
         return writer(Path.of(filePath));
     }
+
+    public static String[] fileToArray(Path filePath) throws IOException {
+        List<String> lines = Files.readAllLines(filePath);
+        return lines.stream().map(String::trim).filter(line -> !line.isEmpty()).toArray(String[]::new);
+    }
 }
