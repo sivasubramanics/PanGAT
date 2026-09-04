@@ -11,7 +11,8 @@ public class KMCConfig {
         FASTA("-fm"),
         FASTQ("-fq"),
         BAM("-fbam"),
-        CRAM("-fcram");
+        CRAM("-fcram"),
+        KMC("KMC");
 
         private final String flag;
 
@@ -42,10 +43,12 @@ public class KMCConfig {
                 return BAM;
             } else if (fileName.endsWith(".cram")) {
                 return CRAM;
+            } else if (fileName.endsWith(".kmc_suf")) {
+                return KMC;
             }
 
             throw new IllegalArgumentException("Unsupported file extension for path: " + path
-                    + ". Supported extensions are: .fasta, .fa, .fna, .fastq, .fq, .bam, .cram (and their .gz versions)");
+                    + ". Supported extensions are: .fasta, .fa, .fna, .fastq, .fq, .bam, .cram, .kmc_suf (and their .gz versions)");
         }
     }
 

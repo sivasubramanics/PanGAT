@@ -3,6 +3,7 @@ package edu.tamu.pg.pang2p.Utils;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
 
@@ -40,10 +41,14 @@ public class KMCExecutor {
 
             String command = buildCommand(config, inputArgument, tmpDir);
 
-            Logger.info(CLASS_NAME, "Executing KMC for " + inputs.length + " input file(s)...");
-            Logger.info(CLASS_NAME, command);
+            if (command.equals("true")) {
+                Logger.info(CLASS_NAME, "KMC input format is already KMC. Creating symlinks for output files instead of running KMC.");
+            } else {
+                Logger.info(CLASS_NAME, "Executing KMC for " + inputs.length + " input file(s)...");
+                Logger.info(CLASS_NAME, command);
 
-            HelperFunctions.tryExec(command, logFile, logFile);
+                HelperFunctions.tryExec(command, logFile, logFile);
+            }
 
         } finally {
             if (listFile != null && Files.exists(listFile)) {
@@ -54,6 +59,25 @@ public class KMCExecutor {
     }
 
     private static String buildCommand(KMCConfig config, String inputArg, Path tmpDir) {
+        if ("KMC".equalsIgnoreCase(config.getInputFormat().getFlag())) {
+            String basePath = inputArg.replaceAll("\\.kmc_(suf|pre)$", "");
+            String outputPrefix = config.getOutputPrefix().toString();
+
+            try {
+                for (String ext : new String[]{".kmc_suf", ".kmc_pre"}) {
+                    Path target = Paths.get(basePath + ext);
+                    Path link = Paths.get(outputPrefix + ext);
+                    Files.deleteIfExists(link);
+                    Files.createSymbolicLink(link, target);
+                }
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to create KMC symlinks", e);
+            }
+
+            // Return a dummy true command so tryExec passes without executing an external process
+            return "true";
+        }
+
         return String.join(" ",
                 "kmc",
                 "-k" + config.getKmerSize(),
@@ -67,5 +91,10 @@ public class KMCExecutor {
                 config.getOutputPrefix().toString(),
                 tmpDir.toString()
         );
+    }
+
+    // Helper to wrap the chained commands in quotes for bash -c
+    private static String quoteForShell(String cmd) {
+        return "'" + cmd.replace("'", "'\\''") + "'";
     }
 }
