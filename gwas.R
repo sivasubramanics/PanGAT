@@ -174,12 +174,46 @@ run_gwas <- function(gt, pheno, trait, cutoff_maf = 0.05, cutoff_miss = 0.5, cut
   ID <- rownames(kinmat) ; length(ID)
   cbind(ID, use_trait)
 
-  # Fit linear mixed model with kinship matrix as random effect
-  mod <- lme4qtl::relmatLmer(use_trait ~ (1|ID), relmat = list(ID = kinmat))
+  # Ensure kinship matrix is strictly positive definite
+  kinmat <- as.matrix(kinmat)
+  
+  # Guarantee positive-definiteness via spectral decomposition if min eigenvalue <= 0
+  eig <- eigen(kinmat, symmetric = TRUE)
+  if (min(eig$values) < 1e-6) {
+    eig$values <- pmax(eig$values, 1e-5)
+    kinmat <- eig$vectors %*% diag(eig$values) %*% t(eig$vectors)
+    rownames(kinmat) <- ID
+    colnames(kinmat) <- ID
+  }
 
-  # Calculate narrow sense heritability
-  herit.mod <- lme4qtl::VarProp(mod)
-  herit.mod <- herit.mod$prop[1]
+  # Fit with explicit control bounds
+  mod <- tryCatch({
+    lme4qtl::relmatLmer(
+      use_trait ~ (1|ID), 
+      relmat = list(ID = kinmat),
+      control = lme4::lmerControl(calc.derivs = FALSE)
+    )
+  }, error = function(e) {
+    log_warn(paste0(trait, " - Variance optimization failed on large dataset: ", e$message))
+    return(NULL)
+  })
+
+  # Guard against model fitting failure
+  if (is.null(mod)) {
+    log_warn(paste0(trait, " - Skipping due to model convergence failure."))
+    return(NULL)
+  }
+
+  # Calculate narrow-sense heritability safely
+  herit.mod <- tryCatch({
+    vp <- lme4qtl::VarProp(mod)
+    vp$prop[1]
+  }, error = function(e) {
+    log_warn(paste0(trait, " - Failed to extract heritability: ", e$message))
+    return(NA)
+  })
+
+  if (is.na(herit.mod)) return(NULL)
   # log_info(paste0(trait, " - Narrow-sense heritability (h²)   : ", round(herit.mod, 3)))
   log_info(sprintf("%-40s : %8.3f", paste0(trait, " - Narrow-sense heritability (h²)"), herit.mod))
   # Plot heritability estimate
@@ -263,18 +297,12 @@ run_gwas <- function(gt, pheno, trait, cutoff_maf = 0.05, cutoff_miss = 0.5, cut
 
 # site_summary
 calc_summary <- function(geno){
-  # Columns 1 to 4 are metadata (ID, CHR, START, END)
   meta_cols <- geno[, 1:4]
   geno_mat  <- as.matrix(geno[, -c(1:4)])
-
-  # replace "N" with -1 to keep numeric coding
   geno_mat[geno_mat == "N"] <- -1
   storage.mode(geno_mat) <- "numeric"
 
-  # mask missing genotypes (-1) for calculations
   is_obs <- geno_mat != -1 & !is.na(geno_mat)
-
-  # Allele counts & statistics
   alt_count <- rowSums((geno_mat == 2) & is_obs, na.rm = TRUE) * 2 +
                rowSums((geno_mat == 1) & is_obs, na.rm = TRUE)
   total_alleles <- 2 * rowSums(is_obs)
@@ -284,7 +312,6 @@ calc_summary <- function(geno){
   miss <- rowMeans(!is_obs)
   het  <- rowSums((geno_mat == 1) & is_obs, na.rm = TRUE) / rowSums(is_obs)
 
-  # Bind calculated stats as new metadata columns alongside genotypes
   use_gt_summary <- meta_cols %>%
     mutate(
       MAF  = round(maf, 3),
@@ -293,9 +320,12 @@ calc_summary <- function(geno){
     ) %>%
     bind_cols(as.data.frame(geno_mat))
 
+  # Explicit cleanup of internal objects
+  rm(geno_mat, is_obs, alt_count, total_alleles, freq_alt, maf, miss, het)
+  gc()
+
   return(use_gt_summary)
 }
-
 
 # Function to calculate kinship matrix using Zhang method (GAPIT inspired)
 zhang_kinship <- function(snps,hasInbred=TRUE) {
@@ -512,6 +542,7 @@ for (trait in list_of_traits){
     select(CHR, pos, !!sym(trait))
   if (nrow(gwas_res) == 0) next
   gwas_hits <- merge(gwas_hits, gwas_res, by = c("CHR", "pos"), all.x = TRUE)
+  gc()
 }
 
 # print plist for each 6 traits in one page in pdf
