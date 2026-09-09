@@ -3,7 +3,7 @@ package edu.tamu.pg.pang2p;
 import edu.tamu.pg.pang2p.Tasks.Cohort;
 import edu.tamu.pg.pang2p.Tasks.ExportMatrix;
 import edu.tamu.pg.pang2p.Tasks.KmerCoverage;
-import edu.tamu.pg.pang2p.Tasks.SingleCopy;
+import edu.tamu.pg.pang2p.Tasks.Haplotigs;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
 import edu.tamu.pg.pang2p.Plugins.*;
@@ -18,7 +18,7 @@ import java.util.Locale;
             PrepareReference.class,
                 Genotype.class,
                 KmerCoverage.class,
-                SingleCopy.class,
+                Haplotigs.class,
                 Cohort.class,
                 ExportMatrix.class
         })

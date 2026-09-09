@@ -249,5 +249,14 @@ public class Fasta implements Serializable {
             this.description = description;
         }
     }
+
+    public String getSubSequence(int start, int end) {
+        synchronized (lock) {
+            if (start < 0 || end > sequence.length() || start >= end) {
+                throw new IndexOutOfBoundsException("Invalid start or end indices for subsequence.");
+            }
+            return sequence.substring(start, end);
+        }
+    }
 }
 //EOF

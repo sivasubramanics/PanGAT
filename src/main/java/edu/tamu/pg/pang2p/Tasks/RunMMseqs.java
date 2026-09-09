@@ -12,8 +12,8 @@ public class RunMMseqs {
     private final DirectoryStructure dirs;
     private final MMseqsConfig config;
 
-    public RunMMseqs(DirectoryStructure dirs, int threads) {
-        this(dirs, MMseqsConfig.builder().threads(threads).build());
+    public RunMMseqs(DirectoryStructure dirs, int threads, boolean isForce) {
+        this(dirs, MMseqsConfig.builder().threads(threads).isForce(isForce).build());
     }
 
     public RunMMseqs(DirectoryStructure dirs, MMseqsConfig config) {
@@ -24,6 +24,15 @@ public class RunMMseqs {
     // Example: genomesMap = Map<genomeID, genomeName>
     public void run(GenomeMap genomesMap) throws IOException {
         Path singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
+        Path clusterFile = singleCopyDir.resolve("clusters.tsv");
+
+        // Skip execution if output exists and isForce is false
+        if (!config.isForce() && Files.exists(clusterFile)) {
+            Logger.info(CLASS_NAME, "Skipping RunMMseqs step: output file already exists ("
+                    + clusterFile + "). Use --force to re-run.");
+            return;
+        }
+
         // delete all intermediate files from last run.
         cleanFiles(true);
 
@@ -81,7 +90,6 @@ public class RunMMseqs {
         HelperFunctions.tryExec(clusterCmd, mmseqsClusterLog, mmseqsClusterLog);
 
         // Convert to TSV
-        Path clusterFile = singleCopyDir.resolve("clusters.tsv");
         String createTSVLog = singleCopyDir.resolve("mmseqs_clustering.log").toString();
         String createTSVCmd = buildCreateTSVCommand(dbFile, scrClusters, clusterFile);
 
@@ -136,6 +144,7 @@ public class RunMMseqs {
             FileUtils.rmFile(singleCopyDir.resolve("mmseqs_createDB.log"));
         }
     }
+
     private String buildCreateDBCommand(Path fasta, Path dbFile) {
         return String.join(" ",
                 "mmseqs", "createdb",
@@ -165,13 +174,13 @@ public class RunMMseqs {
         );
     }
 
-    // MMseqsConfig builder is similar to KMCConfig, with appropriate defaults!
     public static class MMseqsConfig {
         private final double minSeqIdentity;
         private final double minCoverage;
         private final int covMode;
         private final int threads;
         private final int dbType;
+        private final boolean isForce;
 
         private MMseqsConfig(Builder builder) {
             this.minSeqIdentity = builder.minSeqIdentity;
@@ -179,6 +188,7 @@ public class RunMMseqs {
             this.covMode = builder.covMode;
             this.threads = builder.threads;
             this.dbType = builder.dbType;
+            this.isForce = builder.isForce;
         }
 
         public double getMinSeqIdentity() { return minSeqIdentity; }
@@ -186,6 +196,7 @@ public class RunMMseqs {
         public int getCovMode() { return covMode; }
         public int getThreads() { return threads; }
         public int getDbType() { return dbType; }
+        public boolean isForce() { return isForce; }
 
         public static Builder builder() { return new Builder(); }
 
@@ -195,6 +206,7 @@ public class RunMMseqs {
             private int covMode = Defaults.COV_MODE;
             private int threads = 1;
             private int dbType = 2;
+            private boolean isForce = false;
 
             public Builder minSeqIdentity(double value) {
                 this.minSeqIdentity = value;
@@ -214,6 +226,10 @@ public class RunMMseqs {
             }
             public Builder dbType(int value) {
                 this.dbType = value;
+                return this;
+            }
+            public Builder isForce(boolean value) {
+                this.isForce = value;
                 return this;
             }
             public MMseqsConfig build() {

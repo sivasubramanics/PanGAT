@@ -17,20 +17,31 @@ public class PrepareData {
     private final Path genomesFile;
     private final int nThreads;
     private final DirectoryStructure dirs;
+    private final boolean isForce;
 
-    public PrepareData(DirectoryStructure dirs, Path genomesFile, int nThreads) {
+    public PrepareData(DirectoryStructure dirs, Path genomesFile, int nThreads, boolean isForce) {
         this.dirs = Objects.requireNonNull(dirs, "DirectoryStructure cannot be null");
         this.genomesFile = Objects.requireNonNull(genomesFile, "Genomes file cannot be null");
         if (!FileUtils.isFile(genomesFile)) {
             throw new IllegalArgumentException("Genomes file does not exist: " + genomesFile);
         }
         this.nThreads = nThreads > 0 ? nThreads : 1;
+        this.isForce = isForce;
     }
 
     public void prepare() throws IOException {
         Path genomesDir = dirs.getDirectory(PipelineSteps.GENOMES);
         if (!FileUtils.isDir(genomesDir)) {
             Logger.error(CLASS_NAME, "Genome directory does not exist: " + genomesDir);
+        }
+
+        Path genomesMapFile = dirs.getBaseDir().resolve("genomesMap.csv");
+
+        // Skip entire execution if not forced and the final map file already exists
+        if (!isForce && Files.exists(genomesMapFile)) {
+            Logger.info(CLASS_NAME, "Skipping PrepareData step: output map file already exists ("
+                    + genomesMapFile + "). Use --force to re-run.");
+            return;
         }
 
         Map<String, Path> genomes = readGenomesFile(genomesFile);
@@ -78,7 +89,6 @@ public class PrepareData {
             Logger.error(CLASS_NAME, "Some genomes failed to process. Check logs.");
         }
 
-        Path genomesMapFile = dirs.getBaseDir().resolve("genomesMap.csv");
         try (BufferedWriter writer = Files.newBufferedWriter(genomesMapFile)) {
             for (String[] data : allProcessedData) {
                 writer.write(String.join(",", data));
@@ -87,6 +97,7 @@ public class PrepareData {
         } catch (IOException e) {
             Logger.error(CLASS_NAME, "Error writing genomes map file: " + e.getMessage());
         }
+        Logger.info(CLASS_NAME, "Genomes map file written to: " + genomesMapFile);
     }
 
     private Map<String, Path> readGenomesFile(Path genomesFile) throws IOException {
@@ -147,14 +158,34 @@ public class PrepareData {
     }
 
     /**
-     * Reads, rewrites and indexes a genome FASTA. Throws IOException on error.
+     * Reads, rewrites and indexes a genome FASTA. Respects isForce flag per-genome file.
      */
     private List<String[]> processGenome(Path destPath, Path genomePath, int index, String genomeId) throws IOException {
+        Path faiPath = Path.of(destPath.toString() + ".fai");
+        String genomeCode = HelperFunctions.encode(index, Defaults.CHROM_CODE_LENGTH);
+        List<String[]> processedData = new ArrayList<>();
+
+        // If not forced and both the destination fasta and index exist, reconstruct metadata and skip file generation
+        if (!isForce && Files.exists(destPath) && Files.exists(faiPath)) {
+            Logger.info(CLASS_NAME, String.format(
+                    "Skipping genome [%s]: files already exist (%s)", genomeId, destPath));
+
+            int chromNum = 0;
+            try (FastaReader freader = new FastaReader(genomePath)) {
+                for (Fasta fa : freader) {
+                    String chromCode = HelperFunctions.encode(chromNum, Defaults.CHROM_CODE_LENGTH);
+                    String newID = genomeCode + chromCode;
+                    processedData.add(new String[]{newID, genomeId, fa.getName()});
+                    chromNum++;
+                }
+            }
+            return processedData;
+        }
+
         Logger.info(CLASS_NAME, String.format(
                 "Processing genome [%s]: %s => %s", genomeId, genomePath, destPath));
-        String genomeCode = HelperFunctions.encode(index, Defaults.CHROM_CODE_LENGTH);
+
         int chromNum = 0;
-        List<String[]> processedData = new ArrayList<>();
         try (
                 FastaWriter fw = new FastaWriter(destPath);
                 FastaReader freader = new FastaReader(genomePath)
@@ -173,7 +204,8 @@ public class PrepareData {
             Logger.error(CLASS_NAME, String.format("Error copying genome [%s]: %s to %s: %s", genomeId, genomePath, destPath, e.getMessage()));
             throw e;
         }
-        // create fasta index for each fasta file
+
+        // Create FASTA index
         try {
             new FastaIndex(destPath);
         } catch (Exception e) {

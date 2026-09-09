@@ -25,7 +25,7 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC", required = false, defaultValue = "31")
     private int kmerSize;
 
-    @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "2")
+    @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "1")
     private int minCount;
 
     @Option(names = {"--min_seq_identity"}, description = "Minimum sequence identity for MMseqs2 clustering", required = false, defaultValue = "0.9")
@@ -40,48 +40,45 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     @Option(names = {"--min_length"}, description = "Minimum length for single copy regions to be considered", required = false, defaultValue = "100")
     private int minLength;
 
+    @Option(names = {"--force"}, description = "Force overwrite of existing files", required = false)
+    private boolean isForce;
+
     private static final String CLASS_NAME = PrepareReference.class.getSimpleName();
 
     public Integer call() throws Exception {
 
-        // check if necessary tools are accessible
+        // Check if necessary tools are accessible
         DependencyChecker dependencyChecker = new DependencyChecker();
         dependencyChecker.check();
 
-        // create directories under baseDir
+        // Create directories under baseDir
         DirectoryStructure dirs = new DirectoryStructure(baseDir);
         dirs.createDirectories();
 
-        // prepareReference();
-        PrepareData data = new PrepareData(dirs, genomes, threads);
+        // Prepare raw reference genome data
+        PrepareData data = new PrepareData(dirs, genomes, threads, isForce);
         data.prepare();
 
-        // load genome map from genomesMap.csv
+        // Load genome map from genomesMap.csv
         GenomeMap genomeMap = new GenomeMap(dirs);
 
-        // run KMC for each genome
-        RunKMC runKMC = new RunKMC(dirs);
-        runKMC.run(genomeMap, kmerSize, minCount, threads);
+        // Extract single copy regions (Includes KMC step & automatic cleanup)
+        ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs, isForce);
+        extractSingleCopyRegions.run(genomeMap, kmerSize, minCount, minLength, threads);
 
-        // extract single copy regions for each genome
-        ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs);
-        extractSingleCopyRegions.run(genomeMap, minCount, minLength, threads);
-
-        // clean up KMC database files if not needed
-        runKMC.clean();
-
-        // set commandline options for mmseqs2 clustering
+        // Set commandline options for mmseqs2 clustering
         RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()
                 .threads(threads)
                 .minSeqIdentity(minSeqIdentity)
                 .minCoverage(minCoverage)
                 .covMode(covMode)
+                .isForce(isForce)
                 .build();
-        // run MMseqs2 clustering
+
         RunMMseqs runMMseqs = new RunMMseqs(dirs, mmseqsConfig);
         runMMseqs.run(genomeMap);
 
-        PanCluster panCluster = new PanCluster(dirs);
+        PanCluster panCluster = new PanCluster(dirs, threads, isForce);
         panCluster.run(genomeMap);
 
         return 0;

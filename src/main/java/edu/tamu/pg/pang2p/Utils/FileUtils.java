@@ -1,6 +1,7 @@
 package edu.tamu.pg.pang2p.Utils;
 
 import java.io.*;
+import java.nio.channels.FileChannel;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
@@ -11,6 +12,7 @@ import java.util.zip.GZIPOutputStream;
 public class FileUtils {
 
     private static final String CLASS_NAME = FileUtils.class.getSimpleName();
+    private static final int BUFFER_SIZE = 64 * 1024;
 
     /***
      * Create directory on the file system recursively (something like mkdir -p dirName)
@@ -127,6 +129,16 @@ public class FileUtils {
         }
     }
 
+    public static String replaceExtension(Path file, String oldExtension, String newExtension) {
+        String path = file.toString();
+        int lastIndex = path.lastIndexOf(oldExtension);
+        if (lastIndex != -1) {
+            return path.substring(0, lastIndex) + newExtension + path.substring(lastIndex + oldExtension.length());
+        } else {
+            return path; // return original if extension not found
+        }
+    }
+
     public static File replaceExtension(File file, String oldExtension, String newExtension) {
         String path = file.getAbsolutePath();
         int lastIndex = path.lastIndexOf(oldExtension);
@@ -220,5 +232,72 @@ public class FileUtils {
     public static String[] fileToArray(Path filePath) throws IOException {
         List<String> lines = Files.readAllLines(filePath);
         return lines.stream().map(String::trim).filter(line -> !line.isEmpty()).toArray(String[]::new);
+    }
+
+    public static void catFiles(String[] inFiles, String outFile) throws IOException {
+        if (inFiles == null || inFiles.length == 0) {
+            return;
+        }
+
+        Path outputPath = Path.of(outFile);
+        boolean isGz = outFile.endsWith(".gz");
+
+        if (!isGz) {
+            // Zero-Copy OS transfer mode for uncompressed files
+            try (FileChannel outChannel = FileChannel.open(outputPath,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.TRUNCATE_EXISTING)) {
+
+                for (String inFile : inFiles) {
+                    Path inPath = Path.of(inFile);
+                    if (!Files.exists(inPath)) continue;
+
+                    try (FileChannel inChannel = FileChannel.open(inPath, StandardOpenOption.READ)) {
+                        long transferred = 0;
+                        long size = inChannel.size();
+                        while (transferred < size) {
+                            transferred += inChannel.transferTo(transferred, size - transferred, outChannel);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Optimized stream mode for GZIP streams
+            try (OutputStream os = new BufferedOutputStream(new GZIPOutputStream(Files.newOutputStream(outputPath)), BUFFER_SIZE)) {
+                byte[] buffer = new byte[BUFFER_SIZE];
+                for (String inFile : inFiles) {
+                    Path inPath = Path.of(inFile);
+                    if (!Files.exists(inPath)) continue;
+
+                    try (InputStream is = new BufferedInputStream(Files.newInputStream(inPath), BUFFER_SIZE)) {
+                        int bytesRead;
+                        while ((bytesRead = is.read(buffer)) != -1) {
+                            os.write(buffer, 0, bytesRead);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public static void catFiles(List<Path> inFiles, Path outFile) throws IOException {
+        String[] inPaths = inFiles.stream().map(Path::toString).toArray(String[]::new);
+        catFiles(inPaths, outFile.toString());
+    }
+
+    public static void rmFiles(List<Path> tempFiles) {
+        for (Path tempFile : tempFiles) {
+            try {
+                Files.deleteIfExists(tempFile);
+            } catch (IOException e) {
+                // Ignore
+            }
+        }
+    }
+
+    public static String getExtension(String string) {
+        int lastDot = string.lastIndexOf('.');
+        return lastDot == -1 ? "" : string.substring(lastDot);
     }
 }

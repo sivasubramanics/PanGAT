@@ -21,7 +21,7 @@ public class FastaWriter implements AutoCloseable {
      */
     public FastaWriter(String fastaFile, boolean append) {
         try {
-            Logger.info(CLASS_NAME, "Writing fasta file: " + fastaFile);
+            Logger.debug(CLASS_NAME, "Writing fasta file: " + fastaFile);
             writer = new BufferedWriter(new FileWriter(fastaFile, append));
         } catch (IOException e) {
             Logger.error(CLASS_NAME, "Error opening file: " + fastaFile);

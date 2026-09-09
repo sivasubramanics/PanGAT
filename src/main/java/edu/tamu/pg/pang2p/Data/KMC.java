@@ -81,6 +81,9 @@ public class KMC implements AutoCloseable {
         printSummary();
     }
 
+    public KMC(Path kmcPrefix, boolean inMemory) throws IOException {
+        this(kmcPrefix.toString(), inMemory);
+    }
 
     /***
      * Preload the suffix buffers into memory

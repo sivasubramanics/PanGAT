@@ -17,22 +17,44 @@ public class PanCluster {
     private final Path singleCopyDir;
     private final Path scrFile;
     private int nThreads;
+    private final boolean isForce;
     private final String CLASS_NAME = PanCluster.class.getSimpleName();
 
     // Accept DirectoryStructure and retrieve file paths internally
     public PanCluster(DirectoryStructure dirs) {
-        this.singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
-        this.clustersFile = singleCopyDir.resolve("clusters.tsv");
-        this.scrFile = dirs.getSingleCopyRawFile();
-        this.nThreads = 2;
+        this(dirs, 2, false);
     }
 
     public PanCluster(DirectoryStructure dirs, int nThreads) {
-        this(dirs);
+        this(dirs, nThreads, false);
+    }
+
+    public PanCluster(DirectoryStructure dirs, boolean isForce) {
+        this(dirs, 2, isForce);
+    }
+
+    public PanCluster(DirectoryStructure dirs, int nThreads, boolean isForce) {
+        this.singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
+        this.clustersFile = singleCopyDir.resolve("clusters.tsv");
+        this.scrFile = dirs.getSingleCopyRawFile();
         this.nThreads = nThreads;
+        this.isForce = isForce;
     }
 
     public void run(GenomeMap genomeMap) throws IOException {
+        Path panClustersFasta = singleCopyDir.resolve("pan_clusters.fasta");
+        Path repOut = singleCopyDir.resolve("pan_clusters_rep.tsv");
+        Path membOut = singleCopyDir.resolve("pan_clusters_members.tsv");
+        Path bedOut = singleCopyDir.resolve("pan_clusters.bed");
+
+        // Skip execution if outputs exist and isForce is false
+        if (!isForce && Files.exists(panClustersFasta) && Files.exists(repOut)
+                && Files.exists(membOut) && Files.exists(bedOut)) {
+            Logger.info(CLASS_NAME, "Skipping PanCluster step: output files already exist. Use --force to re-run.");
+            return;
+        }
+
+        Logger.info(CLASS_NAME, "Running PanCluster step.");
 
         Graph<String, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
         try (BufferedReader br = new BufferedReader(new FileReader(clustersFile.toFile()))) {
@@ -60,11 +82,18 @@ public class PanCluster {
 
             String desc = entry.getDescription();
             int start = -1, end = -1;
-            if (desc != null && desc.contains("-")) {
-                String[] parts = desc.trim().split("-");
+            if (desc != null && desc.contains(":") && desc.contains("-")) {
                 try {
-                    start = Integer.parseInt(parts[0]);
-                    end = Integer.parseInt(parts[1]);
+                    // Split "chrom:start-end" into ["chrom", "start-end"]
+                    String[] chromAndRange = desc.trim().split(":");
+                    if (chromAndRange.length == 2) {
+                        // Split "start-end" into ["start", "end"]
+                        String[] coordinates = chromAndRange[1].split("-");
+                        if (coordinates.length == 2) {
+                            start = Integer.parseInt(coordinates[0]);
+                            end = Integer.parseInt(coordinates[1]);
+                        }
+                    }
                 } catch (Exception e) {
                     start = end = -1;
                 }
@@ -87,10 +116,6 @@ public class PanCluster {
             clusters.add(new Cluster("clstr" + idx, memberSeqs));
             idx++;
         }
-
-        Path repOut = singleCopyDir.resolve("pan_clusters_rep.tsv");
-        Path membOut = singleCopyDir.resolve("pan_clusters_members.tsv");
-        Path bedOut = singleCopyDir.resolve("pan_clusters.bed");
 
         try (
                 BufferedWriter repBw = Files.newBufferedWriter(repOut);
@@ -168,7 +193,6 @@ public class PanCluster {
             }
         }
 
-
         Map<String, Fasta> fastaMap = new HashMap<>();
         try (FastaReader scrReader = new FastaReader(scrFile)) {
             for (Fasta scr : scrReader) {
@@ -178,7 +202,6 @@ public class PanCluster {
             }
         }
 
-        Path panClustersFasta = singleCopyDir.resolve("pan_clusters.fasta");
         try (FastaWriter fastaWriter = new FastaWriter(panClustersFasta.toString())) {
             for (String seqId : panScrIDs) {
                 Fasta scr = fastaMap.get(seqId);
@@ -190,27 +213,11 @@ public class PanCluster {
             }
         }
 
-//        Path kmcPrefix = singleCopyDir.resolve("pan_clusters");
-//        KMCConfig kmcConfig = KMCConfig.builder()
-//                .inputPath(panClustersFasta)
-//                .outputPrefix(kmcPrefix)
-//                .threads(nThreads)
-//                .kmerSize(51)
-//                .minCount(1)
-//                .build();
-//
-//        Logger.info(CLASS_NAME, "Running KMC on pan_clusters fasta...");
-//        KMCExecutor.run(kmcConfig);
-        // clean up the intermediate files all_single_copy_regions.fasta, all_single_copy_regions.fasta.faidx, clusters.tsv, mmseqs_clustering.log, mmseqs_createDB.log
-
-
+        // Clean up log files and temporary FASTA indices (retaining clusters.tsv)
         FileUtils.rmFile(singleCopyDir.resolve("mmseqs_clustering.log"));
         FileUtils.rmFile(singleCopyDir.resolve("mmseqs_createDB.log"));
-        FileUtils.rmFile(singleCopyDir.resolve("clusters.tsv"));
         FileUtils.rmFile(singleCopyDir.resolve("all_single_copy_regions.fasta"));
         FileUtils.rmFile(singleCopyDir.resolve("all_single_copy_regions.fasta.faidx"));
-
-
     }
 
     /**

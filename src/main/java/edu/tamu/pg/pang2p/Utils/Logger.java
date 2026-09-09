@@ -11,8 +11,8 @@ public class Logger {
         INFO, WARNING, ERROR, DEBUG, UNKNOWN, PROGRESS
     }
 
-    public static void log(LogLevel logLevel, String className, String message) {
-        // assuming max className is 20 characters long
+    // Synchronized to prevent multi-threaded log interleaving
+    public static synchronized void log(LogLevel logLevel, String className, String message) {
         if (className.length() < 20) {
             className = String.format("%-20s", className);
         }
@@ -25,9 +25,12 @@ public class Logger {
         }
 
         if (logLevel == LogLevel.PROGRESS) {
-            System.out.printf("\r%s", logPrefix + message);
+            // \r returns to start of line, \033[K clears everything to the right before writing
+            System.out.print("\r\033[K" + logPrefix + message);
+            System.out.flush();
         } else {
-            System.out.println(logPrefix + message);
+            // Clear inline progress line first, then print standard newline log
+            System.out.println("\r\033[K" + logPrefix + message);
         }
 
         if (logLevel == LogLevel.ERROR) {
@@ -36,8 +39,13 @@ public class Logger {
     }
 
     /**
-     * Converts the log level to a string representation
+     * Clear the current inline terminal line manually if needed
      */
+    public static synchronized void clearProgress() {
+        System.out.print("\r\033[K");
+        System.out.flush();
+    }
+
     private static String logLevelToString(LogLevel logLevel) {
         return switch (logLevel) {
             case INFO -> "INFO    ";
@@ -49,39 +57,23 @@ public class Logger {
         };
     }
 
-    /***
-     * Log a message with the INFO log level
-     */
     public static void info(String className, String message) {
         log(LogLevel.INFO, className, message);
     }
 
-    /***
-     * Log a message with the WARNING log level
-     */
     public static void warning(String className, String message) {
         log(LogLevel.WARNING, className, message);
     }
 
-    /***
-     * Log a message with the ERROR log level
-     */
     public static void error(String className, String message) {
         log(LogLevel.ERROR, className, message);
     }
 
-    /***
-     * print progress with inplacement texts
-     */
     public static void progress(String className, String message) {
         log(LogLevel.PROGRESS, className, message);
     }
 
-    /***
-     * Log a message with the DEBUG log level
-     */
     public static void debug(String className, String message) {
         log(LogLevel.DEBUG, className, message);
     }
 }
-//EOF
