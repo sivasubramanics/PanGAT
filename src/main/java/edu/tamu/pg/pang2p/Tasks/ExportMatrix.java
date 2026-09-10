@@ -13,7 +13,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.Callable;
 
-@Command(name = "ExportMatrix", description = "Export normalized coverage matrix and discrete genotype matrix from mapped_kmers matrix", sortOptions = false)
+@Command(name = "export-matrix", description = "Export normalized coverage matrix and discrete genotype matrix from mapped_kmers matrix", sortOptions = false)
 public class ExportMatrix implements Runnable, Callable<Integer> {
 
     @Option(names = {"-p", "--panmatrix"}, description = "Path to input pan-genome matrix file.", required = true)

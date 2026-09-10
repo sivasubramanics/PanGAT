@@ -1,10 +1,7 @@
 package edu.tamu.pg.pang2p.Tasks;
 
 import edu.tamu.pg.pang2p.Data.*;
-import edu.tamu.pg.pang2p.Utils.FileUtils;
-import edu.tamu.pg.pang2p.Utils.KMCConfig;
-import edu.tamu.pg.pang2p.Utils.KMCExecutor;
-import edu.tamu.pg.pang2p.Utils.Logger;
+import edu.tamu.pg.pang2p.Utils.*;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
@@ -19,14 +16,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 @Command(
-        name = "Haplotigs",
-        description = "Extract single copy regions (Haplotigs) for a single genome using a KMC database.",
+        name = "anchors",
+        description = "Extract single copy regions (Anchors) for a single genome.",
         mixinStandardHelpOptions = true,
         sortOptions = false
 )
-public class Haplotigs implements Callable<Integer>, Runnable {
+public class Anchors implements Callable<Integer>, Runnable {
 
-    private static final String CLASS_NAME = Haplotigs.class.getSimpleName();
+    private static final String CLASS_NAME = Anchors.class.getSimpleName();
     private static final Object PRINT_LOCK = new Object(); // Synchronization lock for terminal output
 
     @Option(names = {"-i", "--input"}, description = "Input FASTA file for the genome", required = true)
@@ -35,23 +32,24 @@ public class Haplotigs implements Callable<Integer>, Runnable {
     @Option(names = {"-o", "--output"}, description = "Output FASTA file for extracted single-copy regions", required = true)
     private Path output;
 
-    @Option(names = {"-k", "--kmer-size"}, description = "K-mer size for KMC", defaultValue = "31")
+    @Option(names = {"-k", "--kmer-size"}, description = "K-mer size for KMC [default: 31]", defaultValue = "31")
     private int kmerSize;
 
-    @Option(names = {"--min-count"}, description = "Minimum k-mer count cutoff", defaultValue = "1")
+    @Option(names = {"--min-count"}, description = "Minimum k-mer count cutoff [default: 1]", defaultValue = "1")
     private int minCount;
 
-    @Option(names = {"--min-length"}, description = "Minimum sequence length for single copy regions", defaultValue = "100")
+    @Option(names = {"--min-length"}, description = "Minimum sequence length for single copy anchors [default: 100]", defaultValue = "100")
     private int minLength;
 
-    @Option(names = {"-t", "--threads"}, description = "Number of threads to process chromosomes", defaultValue = "2")
+    @Option(names = {"-t", "--threads"}, description = "Number of threads [default: 2]", defaultValue = "2")
     private int threads;
 
-    public Haplotigs() {}
+    public Anchors() {}
 
-    public Haplotigs(Path input, Path output, int minCount, int minLength, int threads) {
+    public Anchors(Path input, Path output, int kmerSize, int minCount, int minLength, int threads) {
         this.input = input;
         this.output = output;
+        this.kmerSize = kmerSize;
         this.minCount = minCount;
         this.minLength = minLength;
         this.threads = threads;
@@ -59,20 +57,21 @@ public class Haplotigs implements Callable<Integer>, Runnable {
 
     @Override
     public Integer call() throws Exception {
-        extractSingleCopyRegions(input, output, minCount, minLength, threads);
+        extractSingleCopyRegions(input, output, kmerSize, minCount, minLength, threads);
         return 0;
     }
 
     @Override
     public void run() {
         try {
+            HelperFunctions.printCommandLine(new picocli.CommandLine(this), CLASS_NAME);
             call();
         } catch (Exception e) {
             Logger.error(CLASS_NAME, "Execution failed: " + e.getMessage());
         }
     }
 
-    private void extractSingleCopyRegions(Path input, Path output, int minCount, int minLength, int threads) throws IOException {
+    private void extractSingleCopyRegions(Path input, Path output, int kmerSize, int minCount, int minLength, int threads) throws IOException {
         List<Path> tempFiles = new ArrayList<>();
         Path kmcPrefix;
         switch (FileUtils.getExtension(input.toString())) {
@@ -95,6 +94,7 @@ public class Haplotigs implements Callable<Integer>, Runnable {
                 .kmerSize(kmerSize)
                 .minCount(0)
                 .threads(threads)
+                .maxMemory((int) ((Runtime.getRuntime().maxMemory() / (1024.0 * 1024.0 * 1024.0))+1))
                 .build();
 
         Logger.info(CLASS_NAME, "Running KMC for genome: " + input.getFileName());
@@ -144,8 +144,9 @@ public class Haplotigs implements Callable<Integer>, Runnable {
 
         FileUtils.catFiles(tempFiles, output);
         FileUtils.rmFiles(tempFiles);
-        FileUtils.rmFile(kmcPrefix.resolve(".kmc_pre"));
-        FileUtils.rmFile(kmcPrefix.resolve(".kmc_suf"));
+        FileUtils.rmFile(Path.of(kmcPrefix.toString() + ".kmc_pre"));
+        FileUtils.rmFile(Path.of(kmcPrefix.toString() + ".kmc_suf"));
+        FileUtils.rmFile(Path.of(kmcPrefix.toString() + ".kmc.log"));
     }
 
 
@@ -158,9 +159,9 @@ public class Haplotigs implements Callable<Integer>, Runnable {
             long processedKmers = 0;
             int lastLoggedPercent = -1;
 
-            int haplotigStart = -1;
-            int haplotigEnd = -1;
-            boolean isHaplotig = false;
+            int anchorStart = -1;
+            int anchorEnd = -1;
+            boolean isAnchor = false;
             int numHaptigs = 0;
 
             while (it.hasNext()) {
@@ -183,34 +184,34 @@ public class Haplotigs implements Callable<Integer>, Runnable {
                 int count = kmc.getCount(kmer);
 
                 if (count > 0 && count <= minCount) {
-                    if (!isHaplotig) {
-                        haplotigStart = start;
-                        isHaplotig = true;
+                    if (!isAnchor) {
+                        anchorStart = start;
+                        isAnchor = true;
                     }
-                    haplotigEnd = start + kmer.getKmerLength();
+                    anchorEnd = start + kmer.getKmerLength();
                 } else {
-                    if (isHaplotig) {
-                        int haplotigLength = haplotigEnd - haplotigStart;
-                        if (haplotigLength >= minLength) {
+                    if (isAnchor) {
+                        int anchorLength = anchorEnd - anchorStart;
+                        if (anchorLength >= minLength) {
                             numHaptigs++;
-                            String haplotigSeq = fasta.getSubSequence(haplotigStart, haplotigEnd);
-                            writer.write(new Fasta(numHaptigs, chrom + "_" + numHaptigs, haplotigSeq, chrom + ":" + haplotigStart + "-" + haplotigEnd), true);
+                            String anchorsSeq = fasta.getSubSequence(anchorStart, anchorEnd);
+                            writer.write(new Fasta(numHaptigs, chrom + "_" + numHaptigs, anchorsSeq, chrom + ":" + anchorStart + "-" + anchorEnd), true);
                         }
-                        isHaplotig = false;
+                        isAnchor = false;
                     }
                 }
             }
 
-            if (isHaplotig) {
-                int haplotigLength = haplotigEnd - haplotigStart;
-                if (haplotigLength >= minLength) {
+            if (isAnchor) {
+                int anchorLength = anchorEnd - anchorStart;
+                if (anchorLength >= minLength) {
                     numHaptigs++;
-                    String haplotigSeq = fasta.getSubSequence(haplotigStart, haplotigEnd);
-                    writer.write(new Fasta(numHaptigs, chrom + "_" + numHaptigs, haplotigSeq, chrom + ":" + haplotigStart + "-" + haplotigEnd), true);
+                    String anchorsSeq = fasta.getSubSequence(anchorStart, anchorEnd);
+                    writer.write(new Fasta(numHaptigs, chrom + "_" + numHaptigs, anchorsSeq, chrom + ":" + anchorStart + "-" + anchorEnd), true);
                 }
             }
 
-            Logger.info(CLASS_NAME, "Completed processing chromosome " + fasta.getName() + ". Total haplotigs found: " + numHaptigs);
+            Logger.info(CLASS_NAME, "Completed processing chromosome " + fasta.getName() + ". Total anchors found: " + numHaptigs);
         } catch (IOException e) {
             Logger.error(CLASS_NAME, "Error processing chromosome " + fasta.getName() + ": " + e.getMessage());
         }

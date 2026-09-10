@@ -10,8 +10,8 @@ import picocli.CommandLine.*;
 import java.nio.file.Path;
 import java.util.concurrent.*;
 
-@Command(name = "PrepareReferences", description = "Prepare the reference genome for PanHap", sortOptions = false)
-public class PrepareReference implements Callable<Integer>, Runnable {
+@Command(name = "build-ref", description = "Prepare and Build pan anchor reference for PanG2P analysis", sortOptions = false)
+public class BuildReference implements Callable<Integer>, Runnable {
 
     @Option(names = {"-g", "--genomes"}, description = "Path to the reference genome map file (columns: id, path) in CSV format", required = true)
     private Path genomes;
@@ -37,13 +37,13 @@ public class PrepareReference implements Callable<Integer>, Runnable {
     @Option(names = {"--cov_mode"}, description = "Coverage mode for MMseqs2 clustering", required = false, defaultValue = "1")
     private int covMode;
 
-    @Option(names = {"--min_length"}, description = "Minimum length for single copy regions to be considered", required = false, defaultValue = "100")
+    @Option(names = {"--min_length"}, description = "Minimum length for single copy regions to be considered", required = false, defaultValue = "200")
     private int minLength;
 
     @Option(names = {"--force"}, description = "Force overwrite of existing files", required = false)
     private boolean isForce;
 
-    private static final String CLASS_NAME = PrepareReference.class.getSimpleName();
+    private static final String CLASS_NAME = BuildReference.class.getSimpleName();
 
     public Integer call() throws Exception {
 
@@ -63,8 +63,8 @@ public class PrepareReference implements Callable<Integer>, Runnable {
         GenomeMap genomeMap = new GenomeMap(dirs);
 
         // Extract single copy regions (Includes KMC step & automatic cleanup)
-        ExtractSCR extractSingleCopyRegions = new ExtractSCR(dirs, isForce);
-        extractSingleCopyRegions.run(genomeMap, kmerSize, minCount, minLength, threads);
+        ExtractAnchors extractAnchors = new ExtractAnchors(dirs, isForce);
+        extractAnchors.run(genomeMap, kmerSize, minCount, minLength, threads);
 
         // Set commandline options for mmseqs2 clustering
         RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()

@@ -14,7 +14,7 @@ import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-@Command(name = "KmerCoverage", description = "Calculate k-mer coverage for the given sample", sortOptions = false)
+@Command(name = "kmer-coverage", description = "Calculate k-mer coverage for the given sample", sortOptions = false)
 public class KmerCoverage implements Callable<Integer>, Runnable {
 
     @Option(names = {"-r", "--reference"}, description = "Reference file", required = true)

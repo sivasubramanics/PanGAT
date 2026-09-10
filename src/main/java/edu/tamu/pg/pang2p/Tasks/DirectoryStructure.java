@@ -52,11 +52,11 @@ public class DirectoryStructure {
     }
 
     public Path getSingleCopyReference() {
-        return baseDir.resolve(PipelineSteps.SINGLE_COPY.dirName()).resolve("pan_clusters.fasta");
+        return baseDir.resolve(PipelineSteps.ANCHORS.dirName()).resolve("pan_clusters.fasta");
     }
 
     public Path getSingleCopyRawFile() {
-        return baseDir.resolve(PipelineSteps.SINGLE_COPY.dirName()).resolve("all_single_copy_regions.fasta");
+        return baseDir.resolve(PipelineSteps.ANCHORS.dirName()).resolve("all_single_copy_regions.fasta");
     }
 
     public Path getGenotypeDir() {
@@ -64,7 +64,7 @@ public class DirectoryStructure {
     }
 
     public Path getPanClustersRepFile() {
-        return baseDir.resolve(PipelineSteps.SINGLE_COPY.dirName()).resolve("pan_clusters_rep.tsv");
+        return baseDir.resolve(PipelineSteps.ANCHORS.dirName()).resolve("pan_clusters_rep.tsv");
     }
 
     public String getCohortBase() {

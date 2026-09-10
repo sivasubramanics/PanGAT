@@ -13,7 +13,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.Callable;
 
-@Command(name = "Cohort", description = "Compile raw mapped k-mer counts across sample coverage files into mapped_kmers.tsv.gz", sortOptions = false)
+@Command(name = "cohort", description = "Compile raw mapped k-mer counts across sample coverage files into cohort.pan_matrix.tsv.gz", sortOptions = false)
 public class Cohort implements Runnable, Callable<Integer> {
 
     @Spec

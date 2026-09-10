@@ -16,7 +16,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.Callable;
 
-@Command(name = "Genotype", description = "Genotype the samples based on the reference pan haplotypes", sortOptions = false)
+@Command(name = "genotype", description = "Genotype the samples based on the reference pan anchors", sortOptions = false)
 public class Genotype implements Callable<Integer>, Runnable {
 
     @Option(names = {"-b", "--basedir"}, description = "Base directory for the output", required = true)

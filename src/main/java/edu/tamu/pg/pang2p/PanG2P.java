@@ -3,30 +3,50 @@ package edu.tamu.pg.pang2p;
 import edu.tamu.pg.pang2p.Tasks.Cohort;
 import edu.tamu.pg.pang2p.Tasks.ExportMatrix;
 import edu.tamu.pg.pang2p.Tasks.KmerCoverage;
-import edu.tamu.pg.pang2p.Tasks.Haplotigs;
+import edu.tamu.pg.pang2p.Tasks.Anchors;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
 import edu.tamu.pg.pang2p.Plugins.*;
 import edu.tamu.pg.pang2p.Utils.*;
 
-
 import java.util.Locale;
-
 
 @Command(name = "pang2p", description = "pangenome-informed genome-to-phenome framework for trait mapping and prediction", mixinStandardHelpOptions = true, versionProvider = Configs.VersionProvider.class,
         subcommands = {
-            PrepareReference.class,
+                // Main Pipeline
+                BuildReference.class,
                 Genotype.class,
-                KmerCoverage.class,
-                Haplotigs.class,
                 Cohort.class,
-                ExportMatrix.class
+                ExportMatrix.class,
+
+                // Utility Commands
+                KmerCoverage.class,
+                Anchors.class,
         })
 public class PanG2P {
     public static void main(String[] args) {
         Locale.setDefault(Locale.US);
         final PanG2P panG2P = new PanG2P();
         final CommandLine cmd = new CommandLine(panG2P);
+
+        // Custom section renderer for grouped subcommands
+        cmd.getHelpSectionMap().put(
+                CommandLine.Model.UsageMessageSpec.SECTION_KEY_COMMAND_LIST,
+                help ->
+                        renderCommands(
+                                cmd,
+                                "Pipeline Commands:",
+                                "build-ref",
+                                "genotype",
+                                "cohort",
+                                "export-matrix"
+                        ) + renderCommands(
+                                        cmd,
+                                        "Utility Commands:",
+                                        "anchors",
+                                        "kmer-coverage"
+                                )
+        );
 
         boolean isHelpOrVersion = false;
 
@@ -60,6 +80,36 @@ public class PanG2P {
         }
 
         System.exit(exitCode);
-        System.out.println("Hello World!");
+    }
+
+    private static String renderCommands(
+            CommandLine cmd,
+            String heading,
+            String... commandNames) {
+
+        StringBuilder sb = new StringBuilder();
+
+        sb.append(System.lineSeparator())
+                .append(heading)
+                .append(System.lineSeparator());
+
+        for (String name : commandNames) {
+            CommandLine command = cmd.getSubcommands().get(name);
+
+            if (command != null) {
+                String description =
+                        command.getCommandSpec()
+                                .usageMessage()
+                                .description()[0];
+
+                sb.append(String.format(
+                        "  %-15s %s%n",
+                        name,
+                        description
+                ));
+            }
+        }
+
+        return sb.toString();
     }
 }

@@ -1,10 +1,9 @@
 package edu.tamu.pg.pang2p.Utils;
 
 public enum PipelineSteps {
-    GENOMES("PrepReference/genomes"),
-    KMC("PrepReference/kmc"),
-    SINGLE_COPY("PrepReference/HapCatalog"),
-    GENOTYPING("Genotyping");
+    GENOMES("00_prep_ref/00_genomes"),
+    ANCHORS("00_prep_ref/01_pan_anchors"),
+    GENOTYPING("01_genotyping");
 
     private final String dirName;
 

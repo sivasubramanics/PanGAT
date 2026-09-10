@@ -23,7 +23,7 @@ public class RunMMseqs {
 
     // Example: genomesMap = Map<genomeID, genomeName>
     public void run(GenomeMap genomesMap) throws IOException {
-        Path singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
+        Path singleCopyDir = dirs.getDirectory(PipelineSteps.ANCHORS);
         Path clusterFile = singleCopyDir.resolve("clusters.tsv");
 
         // Skip execution if output exists and isForce is false
@@ -103,7 +103,7 @@ public class RunMMseqs {
     }
 
     private void cleanFiles(boolean cleanAll) throws IOException {
-        Path singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
+        Path singleCopyDir = dirs.getDirectory(PipelineSteps.ANCHORS);
         String[] filesToDelete = {
                 "clusters.dbtype",
                 "clusters.index",

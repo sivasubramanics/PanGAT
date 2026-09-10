@@ -5,14 +5,12 @@ import edu.tamu.pg.pang2p.Utils.Defaults;
 import edu.tamu.pg.pang2p.Utils.Logger;
 import edu.tamu.pg.pang2p.Utils.PipelineSteps;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.ExecutionException;
 
-public class ExtractSCR {
+public class ExtractAnchors {
 
-    private static final String CLASS_NAME = ExtractSCR.class.getSimpleName();
+    private static final String CLASS_NAME = ExtractAnchors.class.getSimpleName();
     private final DirectoryStructure dirs;
     private final Path singleCopyDir;
 //    private final Path kmcDir;
@@ -23,16 +21,16 @@ public class ExtractSCR {
     private final int minCount = Defaults.MIN_COUNT;
     private final int minLength = Defaults.MIN_LENGTH;
 
-    public ExtractSCR(DirectoryStructure dirs, boolean isForce) {
+    public ExtractAnchors(DirectoryStructure dirs, boolean isForce) {
         this.dirs = dirs;
 //        this.kmcDir = dirs.getDirectory(PipelineSteps.KMC);
         this.genomesDir = dirs.getDirectory(PipelineSteps.GENOMES);
-        this.singleCopyDir = dirs.getDirectory(PipelineSteps.SINGLE_COPY);
+        this.singleCopyDir = dirs.getDirectory(PipelineSteps.ANCHORS);
         this.isForce = isForce;
     }
 
     public void run(GenomeMap genomesMap, int kmerSize, int minCount, int minLength, int nThreads)
-            throws IOException, ExecutionException, InterruptedException {
+            throws Exception {
 
         // Check if all output files exist for checkpointing
         if (!isForce && checkOutputsExist(genomesMap)) {
@@ -50,10 +48,14 @@ public class ExtractSCR {
 //            String kmcPrefix = kmcDir.resolve(genomeID).toString();
             Path outputFile = singleCopyDir.resolve(genomeID + ".fasta");
 
-            Logger.info(CLASS_NAME, "Extracting single copy haplotigs for genome: " + genomeID);
+            Logger.info(CLASS_NAME, "Extracting single copy anchors for genome: " + genomeID);
 
-            Haplotigs haplotigs = new Haplotigs(genomeFile, outputFile, minCount, minLength, nThreads);
-            haplotigs.run();
+            Anchors anchors = new Anchors(genomeFile, outputFile, kmerSize, minCount, minLength, nThreads);
+            int exitCode = anchors.call();
+
+            if (exitCode != 0) {
+                Logger.error(CLASS_NAME, "Extraction failed for genome: " + genomeID + " with exit code: " + exitCode);
+            }
 
             // Verify file creation and non-zero size
             if (!Files.exists(outputFile) || Files.size(outputFile) == 0) {
