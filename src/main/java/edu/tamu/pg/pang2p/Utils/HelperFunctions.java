@@ -272,6 +272,11 @@ public class HelperFunctions {
         Logger.info(className, "========== CMD options - " + className + " ==========");
         for (CommandLine.Model.OptionSpec option : commandLine.getCommandSpec().options()) {
             if (option.isOption()) {
+                // if it's help or version skip
+                if (option.names()[0].equals("-h") || option.names()[0].equals("--help") || option.names()[0].equals("--version")) {
+                    continue;
+                }
+
                 if (option.names().length == 1) {
                     name = option.names()[0];
                 } else {
@@ -361,6 +366,9 @@ public class HelperFunctions {
 
 
     public static void printMemoryUsage(String label) {
+        if (System.getProperty("DEBUG") == null) {
+            return;
+        }
         Runtime runtime = Runtime.getRuntime();
 
         long max = runtime.maxMemory();
@@ -368,7 +376,7 @@ public class HelperFunctions {
         long free = runtime.freeMemory();
         long used = total - free;
 
-        Logger.info("Memory",
+        Logger.debug("Memory",
                 String.format(
                         "%s | JVM heap: used=%s, allocated=%s, free=%s, max=%s",
                         label,
@@ -386,7 +394,7 @@ public class HelperFunctions {
                 for (String line : Files.readAllLines(status)) {
                     if (line.startsWith("VmRSS:")) {
                         String rss = line.replace("VmRSS:", "").trim();
-                        Logger.info("Memory",
+                        Logger.debug("Memory",
                                 String.format("%s | Process RSS: %s", label, rss));
                         break;
                     }

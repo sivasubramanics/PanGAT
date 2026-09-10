@@ -72,6 +72,8 @@ public class Anchors implements Callable<Integer>, Runnable {
     }
 
     private void extractSingleCopyRegions(Path input, Path output, int kmerSize, int minCount, int minLength, int threads) throws IOException {
+        validateInputs();
+
         List<Path> tempFiles = new ArrayList<>();
         Path kmcPrefix;
         switch (FileUtils.getExtension(input.toString())) {
@@ -211,9 +213,28 @@ public class Anchors implements Callable<Integer>, Runnable {
                 }
             }
 
-            Logger.info(CLASS_NAME, "Completed processing chromosome " + fasta.getName() + ". Total anchors found: " + numHaptigs);
+            Logger.info(CLASS_NAME, "Completed processing sequence " + fasta.getName() + ". Total anchors found: " + numHaptigs);
         } catch (IOException e) {
-            Logger.error(CLASS_NAME, "Error processing chromosome " + fasta.getName() + ": " + e.getMessage());
+            Logger.error(CLASS_NAME, "Error processing sequence " + fasta.getName() + ": " + e.getMessage());
         }
     }
+
+    private void validateInputs() {
+        if (!FileUtils.isFile(input)) {
+            Logger.error(CLASS_NAME, "Input file does not exist: " + input);
+        }
+        if (kmerSize <= 0 || kmerSize % 2 == 0) {
+            Logger.error(CLASS_NAME, "K-mer size must be a positive odd integer.");
+        }
+        if (minCount < 0) {
+            Logger.error(CLASS_NAME, "Min count must be a positive integer.");
+        }
+        if (minLength <= 0) {
+           Logger.error(CLASS_NAME, "Min length must be a positive integer.");
+        }
+        if (threads <= 0) {
+            Logger.error(CLASS_NAME, "Number of threads must be a positive integer.");
+        }
+    }
+
 }

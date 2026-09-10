@@ -16,9 +16,6 @@ import java.util.concurrent.Callable;
 @Command(name = "cohort", description = "Compile raw mapped k-mer counts across sample coverage files into cohort.pan_matrix.tsv.gz", sortOptions = false)
 public class Cohort implements Runnable, Callable<Integer> {
 
-    @Spec
-    private CommandSpec spec; // 1. Inject Picocli CommandSpec
-
     @Option(names = {"-p", "--panclusters"}, description = "Path to pan_clusters_rep.tsv file.", required = true)
     private Path panclustersFile;
 

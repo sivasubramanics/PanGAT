@@ -46,6 +46,7 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
 
     private final String CLASS_NAME = this.getClass().getSimpleName();
     private static final int FLUSH_INTERVAL = 5000;
+    private final AtomicInteger lastLoggedPercent = new AtomicInteger(-1);
 
     // Default no-arg constructor required by PicoCLI
     public KmerCoverage() {
@@ -126,16 +127,29 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         KMC kmc = new KMC(outputDir.resolve(sampleName).toString(), memory);
         HelperFunctions.printMemoryUsage("After KMC load");
 
+        lastLoggedPercent.set(-1);
         try (BufferedWriter writer = Files.newBufferedWriter(outputFile);
              FastaReader fastaReader = new FastaReader(referenceFasta)) {
 
             for (Fasta scr : fastaReader) {
                 completionService.submit(() -> {
                     processFastaRecord(scr, kmc, writer, writeCounter);
+
                     int completed = completedSequences.incrementAndGet();
-                    float progress = (float) (completed * 100) / totalSequences;
-                    synchronized (System.out) {
-                        System.out.printf("\rProgress: %.2f%%", progress);
+                    int percent = (int) ((completed * 100L) / totalSequences);
+
+                    // Ensure progress emission is thread-safe and monotonically increasing
+                    if (percent % 5 == 0) {
+                        synchronized (lastLoggedPercent) {
+                            if (percent > lastLoggedPercent.get()) {
+                                lastLoggedPercent.set(percent);
+                                int dotsCount = percent / 5;
+                                String dots = ".".repeat(dotsCount);
+                                String progressMsg = String.format("Processing %s%d%%", dots, percent);
+
+                                Logger.progress(CLASS_NAME, progressMsg);
+                            }
+                        }
                     }
                     return null;
                 });
@@ -148,15 +162,6 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
                     Logger.error(CLASS_NAME, "Error during task execution: " + e.getMessage());
                 }
             }
-
-            // Clear progress line on console
-            System.out.print("\r");
-            for (int i = 0; i < 100; i++) {
-                System.out.print(" ");
-            }
-            System.out.print("\r");
-            System.out.flush();
-
             writer.flush();
             Logger.info(CLASS_NAME, "Successfully completed k-mer coverage calculation for " + sampleName);
         } catch (Exception e) {

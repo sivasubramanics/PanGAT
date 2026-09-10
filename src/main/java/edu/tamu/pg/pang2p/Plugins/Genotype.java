@@ -168,16 +168,16 @@ public class Genotype implements Callable<Integer>, Runnable {
      */
     private void validateInputs() {
         if (!Files.exists(samplesFile)) {
-            throw new IllegalArgumentException("Samples file does not exist: " + samplesFile);
+            Logger.error(CLASS_NAME, "No samples file found: " + samplesFile);
         }
         if (threads < 1) {
-            throw new IllegalArgumentException("Number of threads must be at least 1.");
+            Logger.error(CLASS_NAME, "Number of threads must be at least 1.");
         }
         if (kmerSize <= 0 || kmerSize % 2 == 0) {
-            throw new IllegalArgumentException("K-mer size must be a positive odd integer.");
+            Logger.error(CLASS_NAME, "K-mer size must be a positive odd integer.");
         }
         if (minCount < 1) {
-            throw new IllegalArgumentException("Minimum k-mer count must be at least 1.");
+            Logger.error(CLASS_NAME, "Minimum k-mer count must be at least 1.");
         }
     }
 }

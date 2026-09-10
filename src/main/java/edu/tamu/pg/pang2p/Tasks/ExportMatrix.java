@@ -29,16 +29,16 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
     private Path excludeGenotypeIdsFile;
 
     @Option(names = {"--min-maf"}, description = "Minimum minor allele frequency for filtering markers [0.05]", required = false, defaultValue = "0.05")
-    private double minMAF = 0.05;
+    private double minMAF;
 
     @Option(names = {"--max-missing-marker"}, description = "Maximum missing data proportion for filtering markers [0.1]", required = false, defaultValue = "0.1")
-    private double maxMissingMarker = 0.1;
+    private double maxMissingMarker;
 
     @Option(names = {"--max-heterozygosity"}, description = "Maximum heterozygosity for filtering markers [0.5]", required = false, defaultValue = "0.5")
-    private double maxHeterozygosity = 0.5;
+    private double maxHeterozygosity;
 
-    @Option(names = {"--cv"}, description = "CV cutoff for filtering markers [0.0]", required = false, defaultValue = "0.0")
-    private double cvCutoff = 0.0;
+    @Option(names = {"--cv"}, description = "CV cutoff for filtering markers [0.3]", required = false, defaultValue = "0.3")
+    private double cvCutoff;
 
     @Option(names = {"--gapit"}, description = "Convert output to GAPIT format (requires R and GAPIT installed).", required = false, defaultValue = "false")
     private boolean gapit = false;
@@ -89,6 +89,7 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
             StringBuilder outLine = new StringBuilder(1024);
 
+            Logger.info(CLASS_NAME, "Reading input file " + panMatrixFile + "...");
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
                 if (line.isEmpty() || line.startsWith("##")) continue;
@@ -224,10 +225,10 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
     private void validateInputs() {
         if (!Files.exists(panMatrixFile)) {
-            throw new IllegalArgumentException("Pan-genome matrix file does not exist: " + panMatrixFile);
+            Logger.error(CLASS_NAME, "Pan-genome matrix file does not exist: " + panMatrixFile);
         }
         if (outPrefix == null || outPrefix.isEmpty()) {
-            throw new IllegalArgumentException("Output prefix must be specified.");
+            Logger.error(CLASS_NAME, "Output prefix is null or empty: " + outPrefix);
         }
     }
 

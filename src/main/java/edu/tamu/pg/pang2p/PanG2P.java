@@ -16,12 +16,12 @@ import java.util.Locale;
                 // Main Pipeline
                 BuildReference.class,
                 Genotype.class,
-                Cohort.class,
                 ExportMatrix.class,
 
                 // Utility Commands
-                KmerCoverage.class,
                 Anchors.class,
+                KmerCoverage.class,
+                Cohort.class,
         })
 public class PanG2P {
     public static void main(String[] args) {
@@ -38,13 +38,13 @@ public class PanG2P {
                                 "Pipeline Commands:",
                                 "build-ref",
                                 "genotype",
-                                "cohort",
                                 "export-matrix"
                         ) + renderCommands(
                                         cmd,
                                         "Utility Commands:",
                                         "anchors",
-                                        "kmer-coverage"
+                                        "kmer-coverage",
+                                        "cohort"
                                 )
         );
 
