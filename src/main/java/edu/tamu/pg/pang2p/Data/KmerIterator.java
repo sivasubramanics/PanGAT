@@ -70,6 +70,50 @@ public class KmerIterator implements Iterator<KmerPosition> {
         return sequence;
     }
 
+//    private KmerPosition computeNext() {
+//        final int kLength = this.kmerLength;
+//        final int seqLen = this.sequenceLength;
+//        final char[] chars = this.kmerChars;
+//
+//        while (index < seqLen) {
+//            char base = (char) (sequence.charAt(index) & 0xDF);
+//
+//            if (base != 'A' && base != 'C' && base != 'G' && base != 'T') {
+//                validStart = index + 1;
+//                validStretchLength = 0;
+//                index++;
+//                continue;
+//            }
+//
+//            if (validStretchLength < kLength) {
+//                chars[validStretchLength] = base;
+//                validStretchLength++;
+//
+//                if (validStretchLength == kLength) {
+//                    Kmer kmer = new Kmer(chars, prefixLength, useCanonical);
+//                    KmerPosition result = new KmerPosition(validStart, kmer);
+//                    index++;
+//                    return result;
+//                }
+//            } else {
+//                int writeIndex = (index - validStart) % kLength;
+//                chars[writeIndex] = base;
+//
+//                char[] linearKmer = new char[kLength];
+//                int part2 = kLength - 1 - writeIndex;
+//
+//                System.arraycopy(chars, writeIndex + 1, linearKmer, 0, part2);
+//                System.arraycopy(chars, 0, linearKmer, part2, writeIndex + 1);
+//
+//                Kmer kmer = new Kmer(linearKmer, prefixLength, useCanonical);
+//                KmerPosition result = new KmerPosition(index - kLength + 1, kmer);
+//                index++;
+//                return result;
+//            }
+//            index++;
+//        }
+//        return null;
+//    }
     private KmerPosition computeNext() {
         final int kLength = this.kmerLength;
         final int seqLen = this.sequenceLength;
@@ -79,9 +123,9 @@ public class KmerIterator implements Iterator<KmerPosition> {
             char base = (char) (sequence.charAt(index) & 0xDF);
 
             if (base != 'A' && base != 'C' && base != 'G' && base != 'T') {
-                validStart = index + 1;
-                validStretchLength = 0;
                 index++;
+                validStart = index;
+                validStretchLength = 0;
                 continue;
             }
 
