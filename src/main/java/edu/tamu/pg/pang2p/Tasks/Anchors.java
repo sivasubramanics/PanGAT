@@ -165,6 +165,7 @@ public class Anchors implements Callable<Integer>, Runnable {
             int anchorEnd = -1;
             boolean isAnchor = false;
             int numHaptigs = 0;
+            int prevStart = -1;
 
             while (it.hasNext()) {
                 KmerPosition kp = it.next();
@@ -185,6 +186,18 @@ public class Anchors implements Callable<Integer>, Runnable {
                 Kmer kmer = kp.getKmer();
                 int count = kmc.getCount(kmer);
 
+                boolean skipped = isAnchor && (prevStart != -1 && start != prevStart + 1);
+
+                if (skipped) {
+                    int anchorLength = anchorEnd - anchorStart;
+                    if (anchorLength >= minLength) {
+                        numHaptigs++;
+                        String anchorsSeq = fasta.getSubSequence(anchorStart, anchorEnd);
+                        writer.write(new Fasta(numHaptigs, chrom + "_" + numHaptigs, anchorsSeq, chrom + ":" + anchorStart + "-" + anchorEnd), true);
+                    }
+                    isAnchor = false;
+                }
+
                 if (count > 0 && count <= minCount) {
                     if (!isAnchor) {
                         anchorStart = start;
@@ -202,6 +215,7 @@ public class Anchors implements Callable<Integer>, Runnable {
                         isAnchor = false;
                     }
                 }
+                prevStart = start;
             }
 
             if (isAnchor) {
