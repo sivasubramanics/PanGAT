@@ -37,6 +37,9 @@ public class BuildReference implements Callable<Integer>, Runnable {
     @Option(names = {"--cov_mode"}, description = "Coverage mode for MMseqs2 clustering", required = false, defaultValue = "1")
     private int covMode;
 
+    @Option(names = {"--max_gap"}, description = "Maximum gap allowed between single copy regions", required = false, defaultValue = "50")
+    private int maxGap;
+
     @Option(names = {"--min_length"}, description = "Minimum length for single copy regions to be considered", required = false, defaultValue = "200")
     private int minLength;
 
@@ -64,7 +67,7 @@ public class BuildReference implements Callable<Integer>, Runnable {
 
         // Extract single copy regions (Includes KMC step & automatic cleanup)
         ExtractAnchors extractAnchors = new ExtractAnchors(dirs, isForce);
-        extractAnchors.run(genomeMap, kmerSize, minCount, minLength, threads);
+        extractAnchors.run(genomeMap, kmerSize, minCount, minLength, maxGap, threads);
 
         // Set commandline options for mmseqs2 clustering
         RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()

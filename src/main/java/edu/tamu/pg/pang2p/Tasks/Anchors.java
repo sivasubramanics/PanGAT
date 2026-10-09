@@ -44,20 +44,23 @@ public class Anchors implements Callable<Integer>, Runnable {
     @Option(names = {"-t", "--threads"}, description = "Number of threads [default: 2]", defaultValue = "2")
     private int threads;
 
+    @Option(names = {"--max-gap"}, description = "Maximum gap size in bases to merge anchors [default: 50]", defaultValue = "50")
+    private int maxGap;
     public Anchors() {}
 
-    public Anchors(Path input, Path output, int kmerSize, int minCount, int minLength, int threads) {
+    public Anchors(Path input, Path output, int kmerSize, int minCount, int minLength, int maxGap, int threads) {
         this.input = input;
         this.output = output;
         this.kmerSize = kmerSize;
         this.minCount = minCount;
         this.minLength = minLength;
+        this.maxGap = maxGap;
         this.threads = threads;
     }
 
     @Override
     public Integer call() throws Exception {
-        extractSingleCopyRegions(input, output, kmerSize, minCount, minLength, threads);
+        extractSingleCopyRegions(input, output, kmerSize, minCount, minLength, maxGap, threads);
         return 0;
     }
 
@@ -71,7 +74,7 @@ public class Anchors implements Callable<Integer>, Runnable {
         }
     }
 
-    private void extractSingleCopyRegions(Path input, Path output, int kmerSize, int minCount, int minLength, int threads) throws IOException {
+    private void extractSingleCopyRegions(Path input, Path output, int kmerSize, int minCount, int minLength, int maxGap, int threads) throws IOException {
         validateInputs();
 
         List<Path> tempFiles = new ArrayList<>();
@@ -125,7 +128,7 @@ public class Anchors implements Callable<Integer>, Runnable {
                 }
                 tempFiles.add(tempFile);
 
-                futures.add(executor.submit(() -> processChrom(fasta, kmc, tempFile, minCount, minLength)));
+                futures.add(executor.submit(() -> processChrom(fasta, kmc, tempFile, minCount, maxGap, minLength)));
             }
 
             executor.shutdown();
@@ -152,7 +155,8 @@ public class Anchors implements Callable<Integer>, Runnable {
     }
 
 
-    private void processChrom(Fasta fasta, KMC kmc, Path tempFile, int minCount, int minLength) {
+
+    private void processChrom(Fasta fasta, KMC kmc, Path tempFile, int minCount, int minLength, int maxGap) {
         try (FastaWriter writer = new FastaWriter(tempFile.toString())) {
             String chrom = fasta.getName();
             KmerIterator it = fasta.kmers(kmc.getKmerLength(), kmc.getPrefixLength(), kmc.isBothStrands());
@@ -163,74 +167,93 @@ public class Anchors implements Callable<Integer>, Runnable {
 
             int anchorStart = -1;
             int anchorEnd = -1;
-            boolean isAnchor = false;
+            boolean inAnchor = false;
             int numHaptigs = 0;
             int prevStart = -1;
+            int kmerLen = kmc.getKmerLength();
+            int prevQualifyingStart = -1;
 
             while (it.hasNext()) {
                 KmerPosition kp = it.next();
                 processedKmers++;
 
+                // Progress logging
                 int percent = (int) ((processedKmers * 100) / totalKmers);
                 if (percent % 5 == 0 && percent != lastLoggedPercent) {
                     lastLoggedPercent = percent;
-                    int dotsCount = percent / 5;
-                    String dots = ".".repeat(dotsCount);
-                    String progressMsg = String.format("Processing %s %s%d%%", chrom, dots, percent);
-
-                    // Emits progress using Logger
-                    Logger.progress(CLASS_NAME, progressMsg);
+                    String dots = ".".repeat(percent / 5);
+                    Logger.progress(CLASS_NAME, String.format("Processing %s %s%d%%", chrom, dots, percent));
                 }
 
                 int start = kp.getStartPos();
                 Kmer kmer = kp.getKmer();
                 int count = kmc.getCount(kmer);
 
-                boolean skipped = isAnchor && (prevStart != -1 && start != prevStart + 1);
+                boolean skippedPosition =
+                        prevStart != -1 && start != prevStart + 1;
 
-                if (skipped) {
-                    int anchorLength = anchorEnd - anchorStart;
-                    if (anchorLength >= minLength) {
-                        numHaptigs++;
-                        String anchorsSeq = fasta.getSubSequence(anchorStart, anchorEnd);
-                        writer.write(new Fasta(numHaptigs, chrom + "_" + numHaptigs, anchorsSeq, chrom + ":" + anchorStart + "-" + anchorEnd), true);
-                    }
-                    isAnchor = false;
+                if (skippedPosition && inAnchor) {
+                    numHaptigs += writeAnchorIfValid(
+                            writer, fasta, chrom, anchorStart, anchorEnd,
+                            minLength, numHaptigs
+                    );
+
+                    inAnchor = false;
+                    anchorStart = -1;
+                    anchorEnd = -1;
+                    prevQualifyingStart = -1;
                 }
 
-                if (count > 0 && count <= minCount) {
-                    if (!isAnchor) {
+                // 2. Check if current k-mer is single-copy / qualifying
+                boolean isQualifying = count > 0 && count <= minCount;
+
+                if (isQualifying) {
+                    if (!inAnchor) {
                         anchorStart = start;
-                        isAnchor = true;
-                    }
-                    anchorEnd = start + kmer.getKmerLength();
-                } else {
-                    if (isAnchor) {
-                        int anchorLength = anchorEnd - anchorStart;
-                        if (anchorLength >= minLength) {
-                            numHaptigs++;
-                            String anchorsSeq = fasta.getSubSequence(anchorStart, anchorEnd);
-                            writer.write(new Fasta(numHaptigs, chrom + "_" + numHaptigs, anchorsSeq, chrom + ":" + anchorStart + "-" + anchorEnd), true);
+                        anchorEnd = start + kmerLen;
+                        inAnchor = true;
+                    } else {
+                        int gapBases = start - anchorEnd;
+//                        int gapBases = start - prevQualifyingStart - 1;
+
+                        if (gapBases <= maxGap) {
+                            anchorEnd = Math.max(anchorEnd, start + kmerLen);
+                        } else {
+                            numHaptigs += writeAnchorIfValid(
+                                    writer, fasta, chrom, anchorStart, anchorEnd,
+                                    minLength, numHaptigs
+                            );
+
+                            anchorStart = start;
+                            anchorEnd = start + kmerLen;
                         }
-                        isAnchor = false;
                     }
                 }
+
                 prevStart = start;
+                prevQualifyingStart = start;
             }
 
-            if (isAnchor) {
-                int anchorLength = anchorEnd - anchorStart;
-                if (anchorLength >= minLength) {
-                    numHaptigs++;
-                    String anchorsSeq = fasta.getSubSequence(anchorStart, anchorEnd);
-                    writer.write(new Fasta(numHaptigs, chrom + "_" + numHaptigs, anchorsSeq, chrom + ":" + anchorStart + "-" + anchorEnd), true);
-                }
+            // 3. Flush final anchor at end of sequence
+            if (inAnchor) {
+                numHaptigs += writeAnchorIfValid(writer, fasta, chrom, anchorStart, anchorEnd, minLength, numHaptigs);
             }
 
             Logger.info(CLASS_NAME, "Completed processing sequence " + fasta.getName() + ". Total anchors found: " + numHaptigs);
         } catch (IOException e) {
             Logger.error(CLASS_NAME, "Error processing sequence " + fasta.getName() + ": " + e.getMessage());
         }
+    }
+
+    private int writeAnchorIfValid(FastaWriter writer, Fasta fasta, String chrom, int start, int end, int minLength, int currentHaptigCount) throws IOException {
+        int length = end - start;
+        if (length >= minLength) {
+            int haptigNum = currentHaptigCount + 1;
+            String anchorsSeq = fasta.getSubSequence(start, end);
+            writer.write(new Fasta(haptigNum, chrom + "_" + haptigNum, anchorsSeq, chrom + ":" + start + "-" + end), true);
+            return 1; // Increment haptig count
+        }
+        return 0;
     }
 
     private void validateInputs() {
@@ -244,7 +267,7 @@ public class Anchors implements Callable<Integer>, Runnable {
             Logger.error(CLASS_NAME, "Min count must be a positive integer.");
         }
         if (minLength <= 0) {
-           Logger.error(CLASS_NAME, "Min length must be a positive integer.");
+            Logger.error(CLASS_NAME, "Min length must be a positive integer.");
         }
         if (threads <= 0) {
             Logger.error(CLASS_NAME, "Number of threads must be a positive integer.");
