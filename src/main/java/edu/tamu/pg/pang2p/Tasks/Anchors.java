@@ -5,9 +5,12 @@ import edu.tamu.pg.pang2p.Utils.*;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
+import java.io.BufferedWriter;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -128,7 +131,7 @@ public class Anchors implements Callable<Integer>, Runnable {
                 }
                 tempFiles.add(tempFile);
 
-                futures.add(executor.submit(() -> processChrom(fasta, kmc, tempFile, minCount, maxGap, minLength)));
+                futures.add(executor.submit(() -> processChrom(fasta, kmc, tempFile, minCount, minLength, maxGap)));
             }
 
             executor.shutdown();
@@ -157,104 +160,121 @@ public class Anchors implements Callable<Integer>, Runnable {
 
 
     private void processChrom(Fasta fasta, KMC kmc, Path tempFile, int minCount, int minLength, int maxGap) {
-        try (FastaWriter writer = new FastaWriter(tempFile.toString())) {
-            String chrom = fasta.getName();
-            KmerIterator it = fasta.kmers(kmc.getKmerLength(), kmc.getPrefixLength(), kmc.isBothStrands());
+        String chrom = fasta.getName();
+        int kmerLen = kmc.getKmerLength();
+        KmerIterator it = fasta.kmers(kmerLen, kmc.getPrefixLength(), kmc.isBothStrands());
 
-            long totalKmers = Math.max(1, fasta.getSequence().length() - kmc.getKmerLength() + 1);
-            long processedKmers = 0;
-            int lastLoggedPercent = -1;
+        long totalKmers = Math.max(1, fasta.getSequence().length() - kmerLen + 1);
+        long processedKmers = 0;
+        int lastLoggedPercent = -1;
 
-            int anchorStart = -1;
-            int anchorEnd = -1;
-            boolean inAnchor = false;
-            int numHaptigs = 0;
-            int prevStart = -1;
-            int kmerLen = kmc.getKmerLength();
-            int prevQualifyingStart = -1;
+        int start = -1;
+        int end = -1;
 
-            while (it.hasNext()) {
-                KmerPosition kp = it.next();
-                processedKmers++;
+        List<Region> regions = new ArrayList<>();
+        String sequence = fasta.getSequence(); // Cache sequence reference to avoid repeated method calls
 
-                // Progress logging
+        while (it.hasNext()) {
+            KmerPosition kp = it.next();
+            processedKmers++;
+
+            // Throttled progress logging: check every 10,000 k-mers instead of every single k-mer
+            if (processedKmers % 10000 == 0 || processedKmers == totalKmers) {
                 int percent = (int) ((processedKmers * 100) / totalKmers);
                 if (percent % 5 == 0 && percent != lastLoggedPercent) {
                     lastLoggedPercent = percent;
                     String dots = ".".repeat(percent / 5);
                     Logger.progress(CLASS_NAME, String.format("Processing %s %s%d%%", chrom, dots, percent));
                 }
+            }
 
-                int start = kp.getStartPos();
-                Kmer kmer = kp.getKmer();
-                int count = kmc.getCount(kmer);
+            int count = kmc.getCount(kp.getKmer());
+            boolean isSingleCopy = count > 0 && count <= minCount;
 
-                boolean skippedPosition =
-                        prevStart != -1 && start != prevStart + 1;
-
-                if (skippedPosition && inAnchor) {
-                    numHaptigs += writeAnchorIfValid(
-                            writer, fasta, chrom, anchorStart, anchorEnd,
-                            minLength, numHaptigs
-                    );
-
-                    inAnchor = false;
-                    anchorStart = -1;
-                    anchorEnd = -1;
-                    prevQualifyingStart = -1;
+            if (isSingleCopy) {
+                if (start == -1) {
+                    start = kp.getStartPos();
                 }
-
-                // 2. Check if current k-mer is single-copy / qualifying
-                boolean isQualifying = count > 0 && count <= minCount;
-
-                if (isQualifying) {
-                    if (!inAnchor) {
-                        anchorStart = start;
-                        anchorEnd = start + kmerLen;
-                        inAnchor = true;
-                    } else {
-                        int gapBases = start - anchorEnd;
-//                        int gapBases = start - prevQualifyingStart - 1;
-
-                        if (gapBases <= maxGap) {
-                            anchorEnd = Math.max(anchorEnd, start + kmerLen);
-                        } else {
-                            numHaptigs += writeAnchorIfValid(
-                                    writer, fasta, chrom, anchorStart, anchorEnd,
-                                    minLength, numHaptigs
-                            );
-
-                            anchorStart = start;
-                            anchorEnd = start + kmerLen;
-                        }
+                end = kp.getStartPos() + kmerLen;
+            } else {
+                if (start != -1 && end != -1) {
+                    if (end - start >= minLength) {
+                        regions.add(new Region(start, end));
                     }
+                    start = -1;
+                    end = -1;
                 }
-
-                prevStart = start;
-                prevQualifyingStart = start;
             }
+        }
 
-            // 3. Flush final anchor at end of sequence
-            if (inAnchor) {
-                numHaptigs += writeAnchorIfValid(writer, fasta, chrom, anchorStart, anchorEnd, minLength, numHaptigs);
+        // Capture any remaining anchor at the end of the sequence
+        if (start != -1 && end != -1) {
+            if (end - start >= minLength) {
+                regions.add(new Region(start, end));
             }
+        }
 
-            Logger.info(CLASS_NAME, "Completed processing sequence " + fasta.getName() + ". Total anchors found: " + numHaptigs);
+        Logger.info(CLASS_NAME, "Found " + regions.size() + " single copy regions for chromosome " + chrom + " before merging (minLength: " + minLength + ").");
+
+        // Sort regions by start position
+        regions.sort(Comparator.comparingInt(r -> r.start));
+
+        // Merge regions with a distance less than maxGap
+        List<Region> mergedRegions = mergeRegions(regions, maxGap, kmerLen);
+
+        Logger.info(CLASS_NAME, "Found " + mergedRegions.size() + " single copy regions for chromosome " + chrom + " after merging (maxGap: " + maxGap + ").");
+
+        // Write the final merged regions to the file
+        try (FastaWriter writer = new FastaWriter(tempFile.toString(), false)) {
+            int numRegions = 0;
+            for (Region r : mergedRegions) {
+                writer.write(new Fasta(numRegions, chrom + "_" + numRegions, sequence.substring(r.start, r.end), r.start + "-" + r.end), true);
+                numRegions++;
+            }
         } catch (IOException e) {
-            Logger.error(CLASS_NAME, "Error processing sequence " + fasta.getName() + ": " + e.getMessage());
+            Logger.error(CLASS_NAME, "Error writing regions for sequence " + fasta.getName() + ": " + e.getMessage());
         }
     }
 
-    private int writeAnchorIfValid(FastaWriter writer, Fasta fasta, String chrom, int start, int end, int minLength, int currentHaptigCount) throws IOException {
-        int length = end - start;
-        if (length >= minLength) {
-            int haptigNum = currentHaptigCount + 1;
-            String anchorsSeq = fasta.getSubSequence(start, end);
-            writer.write(new Fasta(haptigNum, chrom + "_" + haptigNum, anchorsSeq, chrom + ":" + start + "-" + end), true);
-            return 1; // Increment haptig count
+    // Helper class for region representation
+    private static class Region {
+        int start;
+        int end;
+
+        Region(int start, int end) {
+            this.start = start;
+            this.end = end;
         }
-        return 0;
     }
+
+    private List<Region> mergeRegions(List<Region> regions, int maxGap, int kmerLen) {
+        List<Region> merged = new ArrayList<>();
+        if (regions.isEmpty()) {
+            return merged;
+        }
+
+        Region current = regions.get(0);
+        for (int i = 1; i < regions.size(); i++) {
+            Region next = regions.get(i);
+
+            // Start position of the last k-mer in the current region
+            int lastKmerStartCurrent = current.end - kmerLen;
+
+            // Number of k-mer positions between the last k-mer of current and first k-mer of next
+            int kmerGap = next.start - lastKmerStartCurrent;
+
+            if (kmerGap <= maxGap) {
+                // Merge by extending the current region's end
+                current.end = Math.max(current.end, next.end);
+            } else {
+                merged.add(current);
+                current = next;
+            }
+        }
+        merged.add(current);
+        return merged;
+    }
+
 
     private void validateInputs() {
         if (!FileUtils.isFile(input)) {
