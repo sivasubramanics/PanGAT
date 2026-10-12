@@ -3,10 +3,7 @@ import argparse
 import sys
 
 # Pre-allocated 256-byte translation table for fast DNA reverse complementation
-REV_COMP_TRANS = bytes.maketrans(
-    b"ACGTacgtNn",
-    b"TGCAtgcaNn"
-)
+REV_COMP_TRANS = bytes.maketrans(b"ACGTacgtNn", b"TGCAtgcaNn")
 
 
 def parse_args():
@@ -83,7 +80,10 @@ def main():
                 k = len(kmer)
                 print(f"Detected k-mer length: {k}", file=sys.stderr)
             elif len(kmer) != k:
-                print(f"Error: Inconsistent k-mer lengths in {args.kmers}", file=sys.stderr)
+                print(
+                    f"Error: Inconsistent k-mer lengths in {args.kmers}",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
     print(f"Loaded {len(kmers)} k-mers from {args.kmers}", file=sys.stderr)
 
@@ -100,14 +100,18 @@ def main():
                 if b"N" in kmer:
                     if len(anchor) >= args.min_len:
                         anchor_end = anchor_start + len(anchor)
-                        header = f">{chrom.decode()}:{anchor_start}-{anchor_end}\n".encode()
+                        header = (
+                            f">{chrom.decode()}:{anchor_start}-{anchor_end}\n".encode()
+                        )
                         out_handle.write(header + anchor + b"\n")
                     anchor.clear()
                     gap.clear()
                     continue
 
                 canon_kmer = canonical_kmer(kmer)
-                is_single_copy = (canon_kmer in kmers) and (kmers[canon_kmer] <= args.min_count)
+                is_single_copy = (canon_kmer in kmers) and (
+                    kmers[canon_kmer] <= args.min_count
+                )
 
                 if is_single_copy:
                     if len(anchor) == 0:
