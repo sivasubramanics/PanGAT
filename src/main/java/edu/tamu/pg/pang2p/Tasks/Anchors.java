@@ -164,21 +164,23 @@ public class Anchors implements Callable<Integer>, Runnable {
         int kmerLen = kmc.getKmerLength();
         KmerIterator it = fasta.kmers(kmerLen, kmc.getPrefixLength(), kmc.isBothStrands());
 
+        // Approximate total k-mers for progress tracking
         long totalKmers = Math.max(1, fasta.getSequence().length() - kmerLen + 1);
         long processedKmers = 0;
         int lastLoggedPercent = -1;
 
         int start = -1;
         int end = -1;
+        int lastStart = -1;
 
         List<Region> regions = new ArrayList<>();
-        String sequence = fasta.getSequence(); // Cache sequence reference to avoid repeated method calls
+        String sequence = fasta.getSequence();
 
         while (it.hasNext()) {
             KmerPosition kp = it.next();
             processedKmers++;
 
-            // Throttled progress logging: check every 10,000 k-mers instead of every single k-mer
+            // Log progress every 10,000 kmers or at the end of processing
             if (processedKmers % 10000 == 0 || processedKmers == totalKmers) {
                 int percent = (int) ((processedKmers * 100) / totalKmers);
                 if (percent % 5 == 0 && percent != lastLoggedPercent) {
@@ -194,8 +196,15 @@ public class Anchors implements Callable<Integer>, Runnable {
             if (isSingleCopy) {
                 if (start == -1) {
                     start = kp.getStartPos();
+                } else if (kp.getStartPos() > lastStart + 1) {
+                    if (end - start >= minLength) {
+                        regions.add(new Region(start, end));
+                    }
+                    start = kp.getStartPos();
                 }
+
                 end = kp.getStartPos() + kmerLen;
+                lastStart = kp.getStartPos();
             } else {
                 if (start != -1 && end != -1) {
                     if (end - start >= minLength) {
@@ -203,11 +212,12 @@ public class Anchors implements Callable<Integer>, Runnable {
                     }
                     start = -1;
                     end = -1;
+                    lastStart = -1;
                 }
             }
         }
 
-        // Capture any remaining anchor at the end of the sequence
+        // Handle the last region if it exists
         if (start != -1 && end != -1) {
             if (end - start >= minLength) {
                 regions.add(new Region(start, end));
@@ -228,7 +238,7 @@ public class Anchors implements Callable<Integer>, Runnable {
         try (FastaWriter writer = new FastaWriter(tempFile.toString(), false)) {
             int numRegions = 0;
             for (Region r : mergedRegions) {
-                writer.write(new Fasta(numRegions, chrom + "_" + numRegions, sequence.substring(r.start, r.end), r.start + "-" + r.end), true);
+                writer.write(new Fasta(numRegions, chrom + "_" + numRegions, sequence.substring(r.start, r.end), chrom + ":" + r.start + "-" + r.end), true);
                 numRegions++;
             }
         } catch (IOException e) {

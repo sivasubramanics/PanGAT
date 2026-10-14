@@ -150,7 +150,7 @@ public class RunMMseqs {
                 "mmseqs", "createdb",
                 fasta.toString(),
                 dbFile.toString(),
-                "--threads", String.valueOf(config.getThreads()),
+//                "--threads", String.valueOf(config.getThreads()),
                 "--dbtype", String.valueOf(config.getDbType())
         );
     }
