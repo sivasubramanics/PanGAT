@@ -25,7 +25,7 @@ public class BuildReference implements Callable<Integer>, Runnable {
     @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC", required = false, defaultValue = "31")
     private int kmerSize;
 
-    @Option(names = {"-m", "--min_count"}, description = "Minimum count for Single copy region extraction", required = false, defaultValue = "1")
+    @Option(names = {"-m", "--min_count"}, description = "Minimum k-mer count cutoff to not consider for anchors construction [default: 2]", defaultValue = "2")
     private int minCount;
 
     @Option(names = {"--min_seq_identity"}, description = "Minimum sequence identity for MMseqs2 clustering", required = false, defaultValue = "0.9")

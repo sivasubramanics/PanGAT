@@ -1,9 +1,6 @@
 package edu.tamu.pg.pang2p;
 
-import edu.tamu.pg.pang2p.Tasks.Cohort;
-import edu.tamu.pg.pang2p.Tasks.ExportMatrix;
-import edu.tamu.pg.pang2p.Tasks.KmerCoverage;
-import edu.tamu.pg.pang2p.Tasks.Anchors;
+import edu.tamu.pg.pang2p.Tasks.*;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
 import edu.tamu.pg.pang2p.Plugins.*;
@@ -20,6 +17,7 @@ import java.util.Locale;
 
                 // Utility Commands
                 Anchors.class,
+                AnchorsTest.class,
                 KmerCoverage.class,
                 Cohort.class,
         })
@@ -43,6 +41,7 @@ public class PanG2P {
                                         cmd,
                                         "Utility Commands:",
                                         "anchors",
+                                        "anchors-test",
                                         "kmer-coverage",
                                         "cohort"
                                 )

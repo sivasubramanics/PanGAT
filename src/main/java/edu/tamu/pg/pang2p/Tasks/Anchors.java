@@ -19,7 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 @Command(
-        name = "anchors",
+        name = "anchors-old",
         description = "Extract single copy regions (Anchors) for a single genome.",
         mixinStandardHelpOptions = true,
         sortOptions = false

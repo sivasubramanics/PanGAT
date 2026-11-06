@@ -50,7 +50,8 @@ public class ExtractAnchors {
 
             Logger.info(CLASS_NAME, "Extracting single copy anchors for genome: " + genomeID);
 
-            Anchors anchors = new Anchors(genomeFile, outputFile, kmerSize, minCount, minLength, maxGap, nThreads);
+            AnchorsTest anchors = new AnchorsTest(genomeFile, outputFile, kmerSize, minCount, minLength, maxGap, nThreads);
+//            Anchors anchors = new Anchors(genomeFile, outputFile, kmerSize, minCount, minLength, maxGap, nThreads);
             int exitCode = anchors.call();
 
             if (exitCode != 0) {
