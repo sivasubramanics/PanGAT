@@ -69,9 +69,6 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         HelperFunctions.printCommandLine(new CommandLine(this), CLASS_NAME);
         validateCMD();
 
-        DependencyChecker dependencyChecker = new DependencyChecker();
-        dependencyChecker.check();
-
         calculateCoverage();
         return 0;
     }

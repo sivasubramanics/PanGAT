@@ -5,8 +5,6 @@ import edu.tamu.pg.pang2p.Utils.*;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
-import java.io.BufferedWriter;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -19,15 +17,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 @Command(
-        name = "anchors-old",
-        description = "Extract single copy regions (Anchors) for a single genome.",
+        name = "anchors",
+        description = "Extract single copy regions (Anchors) for a single genome with reverse method.",
         mixinStandardHelpOptions = true,
         sortOptions = false
 )
 public class Anchors implements Callable<Integer>, Runnable {
 
     private static final String CLASS_NAME = Anchors.class.getSimpleName();
-    private static final Object PRINT_LOCK = new Object(); // Synchronization lock for terminal output
 
     @Option(names = {"-i", "--input"}, description = "Input FASTA file for the genome", required = true)
     private Path input;
@@ -38,7 +35,7 @@ public class Anchors implements Callable<Integer>, Runnable {
     @Option(names = {"-k", "--kmer-size"}, description = "K-mer size for KMC [default: 31]", defaultValue = "31")
     private int kmerSize;
 
-    @Option(names = {"--min-count"}, description = "Minimum k-mer count cutoff [default: 1]", defaultValue = "1")
+    @Option(names = {"--min-count"}, description = "Minimum k-mer count cutoff to not consider for anchors construction [default: 2]", defaultValue = "2")
     private int minCount;
 
     @Option(names = {"--min-length"}, description = "Minimum sequence length for single copy anchors [default: 100]", defaultValue = "100")
@@ -100,7 +97,7 @@ public class Anchors implements Callable<Integer>, Runnable {
                 .inputPath(input)
                 .outputPrefix(kmcPrefix)
                 .kmerSize(kmerSize)
-                .minCount(0)
+                .minCount(minCount)
                 .threads(threads)
                 .maxMemory((int) ((Runtime.getRuntime().maxMemory() / (1024.0 * 1024.0 * 1024.0))+1))
                 .build();
@@ -127,7 +124,7 @@ public class Anchors implements Callable<Integer>, Runnable {
                         tempFile = Path.of(FileUtils.replaceExtension(output, ".fna", "." + fasta.getName() + ".tmp"));
                         break;
                     default:
-                        throw new IllegalArgumentException("Output file must have .fasta or .fa extension.");
+                        throw new IllegalArgumentException("Output file must have .fasta or .fa or .fna extension.");
                 }
                 tempFiles.add(tempFile);
 
@@ -157,21 +154,18 @@ public class Anchors implements Callable<Integer>, Runnable {
         FileUtils.rmFile(Path.of(kmcPrefix.toString() + ".kmc.log"));
     }
 
-
-
     private void processChrom(Fasta fasta, KMC kmc, Path tempFile, int minCount, int minLength, int maxGap) {
         String chrom = fasta.getName();
         int kmerLen = kmc.getKmerLength();
         KmerIterator it = fasta.kmers(kmerLen, kmc.getPrefixLength(), kmc.isBothStrands());
 
-        // Approximate total k-mers for progress tracking
         long totalKmers = Math.max(1, fasta.getSequence().length() - kmerLen + 1);
         long processedKmers = 0;
         int lastLoggedPercent = -1;
 
         int start = -1;
         int end = -1;
-        int lastStart = -1;
+        int lastKmerPos = -1;
 
         List<Region> regions = new ArrayList<>();
         String sequence = fasta.getSequence();
@@ -180,7 +174,7 @@ public class Anchors implements Callable<Integer>, Runnable {
             KmerPosition kp = it.next();
             processedKmers++;
 
-            // Log progress every 10,000 kmers or at the end of processing
+            // Progress logging
             if (processedKmers % 10000 == 0 || processedKmers == totalKmers) {
                 int percent = (int) ((processedKmers * 100) / totalKmers);
                 if (percent % 5 == 0 && percent != lastLoggedPercent) {
@@ -191,30 +185,31 @@ public class Anchors implements Callable<Integer>, Runnable {
             }
 
             int count = kmc.getCount(kp.getKmer());
-            boolean isSingleCopy = count > 0 && count <= minCount;
+            boolean isSingleCopy = (count < minCount);
 
             if (isSingleCopy) {
                 if (start == -1) {
+                    // Start a new region
                     start = kp.getStartPos();
-                } else if (kp.getStartPos() > lastStart + 1) {
+                } else if (kp.getStartPos() > lastKmerPos + 1) {
+                    // Invalid k-mer or gap encountered: force-split the single copy region
                     if (end - start >= minLength) {
                         regions.add(new Region(start, end));
                     }
                     start = kp.getStartPos();
                 }
-
                 end = kp.getStartPos() + kmerLen;
-                lastStart = kp.getStartPos();
             } else {
+                // High count k-mer: close current region if active
                 if (start != -1 && end != -1) {
                     if (end - start >= minLength) {
                         regions.add(new Region(start, end));
                     }
                     start = -1;
                     end = -1;
-                    lastStart = -1;
                 }
             }
+            lastKmerPos = kp.getStartPos();
         }
 
         // Handle the last region if it exists
@@ -229,8 +224,8 @@ public class Anchors implements Callable<Integer>, Runnable {
         // Sort regions by start position
         regions.sort(Comparator.comparingInt(r -> r.start));
 
-        // Merge regions with a distance less than maxGap
-        List<Region> mergedRegions = mergeRegions(regions, maxGap, kmerLen);
+        // Merge regions separated by less than or equal to maxGap
+        List<Region> mergedRegions = mergeRegions(regions, maxGap);
 
         Logger.info(CLASS_NAME, "Found " + mergedRegions.size() + " single copy regions for chromosome " + chrom + " after merging (maxGap: " + maxGap + ").");
 
@@ -246,18 +241,7 @@ public class Anchors implements Callable<Integer>, Runnable {
         }
     }
 
-    // Helper class for region representation
-    private static class Region {
-        int start;
-        int end;
-
-        Region(int start, int end) {
-            this.start = start;
-            this.end = end;
-        }
-    }
-
-    private List<Region> mergeRegions(List<Region> regions, int maxGap, int kmerLen) {
+    private List<Region> mergeRegions(List<Region> regions, int maxGap) {
         List<Region> merged = new ArrayList<>();
         if (regions.isEmpty()) {
             return merged;
@@ -267,14 +251,9 @@ public class Anchors implements Callable<Integer>, Runnable {
         for (int i = 1; i < regions.size(); i++) {
             Region next = regions.get(i);
 
-            // Start position of the last k-mer in the current region
-            int lastKmerStartCurrent = current.end - kmerLen;
+            int baseGap = next.start - current.end;
 
-            // Number of k-mer positions between the last k-mer of current and first k-mer of next
-            int kmerGap = next.start - lastKmerStartCurrent;
-
-            if (kmerGap <= maxGap) {
-                // Merge by extending the current region's end
+            if (baseGap <= maxGap) {
                 current.end = Math.max(current.end, next.end);
             } else {
                 merged.add(current);
@@ -283,6 +262,17 @@ public class Anchors implements Callable<Integer>, Runnable {
         }
         merged.add(current);
         return merged;
+    }
+
+    // Helper class for region representation
+    private static class Region {
+        int start;
+        int end;
+
+        Region(int start, int end) {
+            this.start = start;
+            this.end = end;
+        }
     }
 
 
@@ -303,5 +293,4 @@ public class Anchors implements Callable<Integer>, Runnable {
             Logger.error(CLASS_NAME, "Number of threads must be a positive integer.");
         }
     }
-
 }

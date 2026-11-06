@@ -12,6 +12,9 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.*;
 
+/***
+ * This class is responsible for preparing the reference genomes and directory structure for the pipeline.
+ */
 public class PrepareData {
     private static final String CLASS_NAME = PrepareData.class.getSimpleName();
     private final Path genomesFile;

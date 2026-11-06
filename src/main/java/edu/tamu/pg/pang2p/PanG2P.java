@@ -6,6 +6,7 @@ import picocli.CommandLine.*;
 import edu.tamu.pg.pang2p.Plugins.*;
 import edu.tamu.pg.pang2p.Utils.*;
 
+import java.io.IOException;
 import java.util.Locale;
 
 @Command(name = "pang2p", description = "pangenome-informed genome-to-phenome framework for trait mapping and prediction", mixinStandardHelpOptions = true, versionProvider = Configs.VersionProvider.class,
@@ -17,12 +18,11 @@ import java.util.Locale;
 
                 // Utility Commands
                 Anchors.class,
-                AnchorsTest.class,
                 KmerCoverage.class,
                 Cohort.class,
         })
 public class PanG2P {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
         Locale.setDefault(Locale.US);
         final PanG2P panG2P = new PanG2P();
         final CommandLine cmd = new CommandLine(panG2P);
@@ -57,6 +57,11 @@ public class PanG2P {
         }
 
         long startTime = isHelpOrVersion ? 0 : System.currentTimeMillis();
+
+        // Check if necessary tools are accessible
+        DependencyChecker dependencyChecker = new DependencyChecker();
+        dependencyChecker.check();
+
         int exitCode = cmd.execute(args);
         long endTime = System.currentTimeMillis();
 

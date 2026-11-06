@@ -7,6 +7,9 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Path;
 import java.nio.file.Files;
 
+/**
+ * Class to run MMseqs2 clustering on single copy regions extracted from genomes.
+ */
 public class RunMMseqs {
     private static final String CLASS_NAME = RunMMseqs.class.getSimpleName();
     private final DirectoryStructure dirs;

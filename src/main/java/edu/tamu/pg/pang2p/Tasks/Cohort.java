@@ -5,7 +5,6 @@ import edu.tamu.pg.pang2p.Utils.HelperFunctions;
 import edu.tamu.pg.pang2p.Utils.Logger;
 import picocli.CommandLine;
 import picocli.CommandLine.*;
-import picocli.CommandLine.Model.CommandSpec; // Import CommandSpec
 
 import java.io.*;
 import java.nio.file.Files;
@@ -69,10 +68,8 @@ public class Cohort implements Runnable, Callable<Integer> {
             panHap = new PanHap(panclustersFile);
         }
 
-        // 2. Set the command line string on PanHap
         panHap.addCommandLine(HelperFunctions.getCommandLine());
 
-        // Optional: Add parameters to metadata
         panHap.addParameter("cvCutoff", String.valueOf(cvCutoff));
 
         panHap.addParameter("numHaps", String.valueOf(panHap.getHapNum()));

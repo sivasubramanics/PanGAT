@@ -198,9 +198,6 @@ public class KMCConfig {
         /**
          * Safely estimates memory (in GB) for KMC without over-allocating system/JVM heap resources.
          */
-        /**
-         * Safely estimates memory (in GB) for KMC without over-allocating system/JVM heap resources.
-         */
         private double calculateSafeMemoryGB() {
             Runtime runtime = Runtime.getRuntime();
 

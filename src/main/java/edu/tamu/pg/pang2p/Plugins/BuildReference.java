@@ -50,10 +50,6 @@ public class BuildReference implements Callable<Integer>, Runnable {
 
     public Integer call() throws Exception {
 
-        // Check if necessary tools are accessible
-        DependencyChecker dependencyChecker = new DependencyChecker();
-        dependencyChecker.check();
-
         // Create directories under baseDir
         DirectoryStructure dirs = new DirectoryStructure(baseDir);
         dirs.createDirectories();

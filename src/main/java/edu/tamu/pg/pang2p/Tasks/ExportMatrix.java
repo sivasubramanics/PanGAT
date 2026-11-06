@@ -65,7 +65,6 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
             Set<String> includeGenotypes = loadGenotypeSet(includeGenotypeIdsFile);
             Set<String> excludeGenotypes = loadGenotypeSet(excludeGenotypeIdsFile);
 
-            // Handle overlap prioritizing include list
             if (includeGenotypes != null && excludeGenotypes != null) {
                 Set<String> overlap = new HashSet<>(excludeGenotypes);
                 overlap.retainAll(includeGenotypes);
@@ -84,8 +83,10 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
             int failedCV = 0;
             int filteredMarkers = 0;
 
-            // Global genotype counters across retained markers
             long globalMissing = 0, globalHomRef = 0, globalHet = 0, globalHomAlt = 0;
+
+            // Track seen positions to handle duplicates across genomes/anchors
+            Set<String> seenCoordinates = new HashSet<>();
 
             StringBuilder outLine = new StringBuilder(1024);
 
@@ -124,13 +125,11 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
                 totalMarkers++;
 
-                // Fast CV check
                 boolean cvFailed = Double.parseDouble(tokens[12]) < cvCutoff;
                 if (cvFailed) {
                     failedCV++;
                 }
 
-                // Compute stats on genotype data independently
                 MarkerStats stats = new MarkerStats(tokens, targetIndices);
 
                 if (stats.missingProportion() > maxMissingMarker) {
@@ -146,22 +145,36 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
                     stats.setGood(false);
                 }
 
-                // If any filter failed (including CV), skip writing this marker
                 if (cvFailed || !stats.isGood()) {
                     continue;
                 }
 
-                // Retained marker stats accumulation
                 filteredMarkers++;
                 globalMissing += stats.alleleCounts[0];
                 globalHomRef += stats.alleleCounts[1];
                 globalHet += stats.alleleCounts[2];
                 globalHomAlt += stats.alleleCounts[3];
 
+                // Resolve duplicate CHR + START positions
+                String chr = String.valueOf(HelperFunctions.alphaToInt(tokens[3], Defaults.CHROM_CODE_LENGTH) + 1);
+                long startPos = Long.parseLong(tokens[4]);
+                long endPos = Long.parseLong(tokens[5]);
+                long lengthDiff = endPos - startPos; // preserve original marker length
+
+                String coordKey = chr + ":" + startPos;
+                while (seenCoordinates.contains(coordKey)) {
+                    startPos++;
+                    coordKey = chr + ":" + startPos;
+                }
+                seenCoordinates.add(coordKey);
+
+                // Recalculate end to match the shifted start if you want to keep width constant
+                endPos = startPos + lengthDiff;
+
                 outLine.append(tokens[0]).append("\t")  // ID
-                        .append(HelperFunctions.alphaToInt(tokens[3], Defaults.CHROM_CODE_LENGTH) + 1).append("\t")  // CHR
-                        .append(tokens[4]).append("\t")  // Start
-                        .append(tokens[5]);              // End
+                        .append(chr).append("\t")       // CHR
+                        .append(startPos).append("\t")  // Start (adjusted if duplicate)
+                        .append(endPos);                // End (adjusted if duplicate)
                 for (int gt : stats.gtData) {
                     outLine.append("\t").append(gt);
                 }
@@ -212,6 +225,7 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
         try {
             call();
         } catch (Exception e) {
+            Logger.error(CLASS_NAME, "Error during task execution: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -293,10 +307,8 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
         File tempScript = null;
         try {
-            // 1. Create temporary script
             tempScript = File.createTempFile("convertGTmatrixToRdata_", ".R");
 
-            // 2. Write R execution logic to temp file
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempScript))) {
                 writer.write(String.format(
                         "gt <- read.table('%s.genotype.tsv', header = TRUE, check.names = FALSE)\n" +
@@ -328,9 +340,8 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
                                 "# write.table(GD, '%s.gt.tsv', sep = '\\t', quote = FALSE, row.names = FALSE)\n",
                         outPrefix, outPrefix, outPrefix, outPrefix
                 ));
-            } // Writer flushes and closes HERE before Rscript runs
+            }
 
-            // 3. Run ProcessBuilder to capture R output and errors directly
             ProcessBuilder pb = new ProcessBuilder("Rscript", tempScript.getAbsolutePath());
             pb.redirectErrorStream(true);
             Process proc = pb.start();

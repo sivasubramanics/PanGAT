@@ -1,7 +1,6 @@
 package edu.tamu.pg.pang2p.Plugins;
 
 import edu.tamu.pg.pang2p.Tasks.Cohort;
-import edu.tamu.pg.pang2p.Tasks.DependencyChecker;
 import edu.tamu.pg.pang2p.Tasks.DirectoryStructure;
 import edu.tamu.pg.pang2p.Tasks.KmerCoverage;
 import edu.tamu.pg.pang2p.Utils.HelperFunctions;
@@ -55,9 +54,6 @@ public class Genotype implements Callable<Integer>, Runnable {
     public Integer call() throws Exception {
         HelperFunctions.printCommandLine(new CommandLine(this), CLASS_NAME);
         validateInputs();
-
-        DependencyChecker dependencyChecker = new DependencyChecker();
-        dependencyChecker.check();
 
         executeGenotyping();
         return 0;
