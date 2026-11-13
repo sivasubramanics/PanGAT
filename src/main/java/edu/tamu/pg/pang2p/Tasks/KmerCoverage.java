@@ -53,7 +53,12 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     }
 
     // Parameterized constructor for programmatically calling this task
-    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, boolean memory) {
+    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, boolean memory){
+        this(referenceFasta, sampleName, inputFiles, outputFile, kmerSize, threads, minCount, memory, false);
+    }
+
+    // Parameterized constructor for programmatically calling this task
+    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, boolean memory, boolean keepKmc) {
         this.referenceFasta = referenceFasta;
         this.sampleName = sampleName;
         this.inputFiles = inputFiles;
@@ -62,6 +67,7 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         this.threads = threads;
         this.minCount = minCount;
         this.memory = memory;
+        this.keepKmc = keepKmc;
     }
 
     @Override

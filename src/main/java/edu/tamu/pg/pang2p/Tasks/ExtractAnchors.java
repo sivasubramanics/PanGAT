@@ -22,7 +22,7 @@ public class ExtractAnchors {
         this.isForce = isForce;
     }
 
-    public void run(GenomeMap genomesMap, int kmerSize, int minCount, int minLength, int maxGap, int nThreads)
+    public void run(GenomeMap genomesMap, int kmerSize, int minCount, int minLength, int maxGap, int nThreads, boolean strict)
             throws Exception {
 
         // Check if all output files exist for checkpointing
@@ -37,7 +37,7 @@ public class ExtractAnchors {
 
             Logger.info(CLASS_NAME, "Extracting single copy anchors for genome: " + genomeID);
 
-            Anchors anchors = new Anchors(genomeFile, outputFile, kmerSize, minCount, minLength, maxGap, nThreads);
+            Anchors anchors = new Anchors(genomeFile, outputFile, kmerSize, minCount, minLength, maxGap, nThreads, strict);
             int exitCode = anchors.call();
 
             if (exitCode != 0) {

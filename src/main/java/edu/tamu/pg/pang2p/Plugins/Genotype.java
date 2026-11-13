@@ -101,7 +101,8 @@ public class Genotype implements Callable<Integer>, Runnable {
                     kmerSize,
                     threads,
                     minCount,
-                    memory
+                    memory,
+                    keepKmc
             );
 
             try {

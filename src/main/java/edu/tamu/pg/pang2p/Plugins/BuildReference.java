@@ -28,6 +28,9 @@ public class BuildReference implements Callable<Integer>, Runnable {
     @Option(names = {"-m", "--min_count"}, description = "Minimum k-mer count cutoff to not consider for anchors construction [default: 2]", defaultValue = "2")
     private int minCount;
 
+    @Option(names = {"--strict"}, description = "Strict mode: do not allow single copy regions to start inside bases covered by a preceding duplicated k-mer [default: false]", defaultValue = "false")
+    private boolean strict;
+
     @Option(names = {"--min_seq_identity"}, description = "Minimum sequence identity for MMseqs2 clustering", required = false, defaultValue = "0.9")
     private double minSeqIdentity;
 
@@ -63,7 +66,7 @@ public class BuildReference implements Callable<Integer>, Runnable {
 
         // Extract single copy regions (Includes KMC step & automatic cleanup)
         ExtractAnchors extractAnchors = new ExtractAnchors(dirs, isForce);
-        extractAnchors.run(genomeMap, kmerSize, minCount, minLength, maxGap, threads);
+        extractAnchors.run(genomeMap, kmerSize, minCount, minLength, maxGap, threads, strict);
 
         // Set commandline options for mmseqs2 clustering
         RunMMseqs.MMseqsConfig mmseqsConfig = RunMMseqs.MMseqsConfig.builder()

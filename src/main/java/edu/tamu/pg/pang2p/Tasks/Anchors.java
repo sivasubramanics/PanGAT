@@ -48,9 +48,18 @@ public class Anchors implements Callable<Integer>, Runnable {
 
     @Option(names = {"--max-gap"}, description = "Maximum gap size in bases to merge anchors [default: 50]", defaultValue = "50")
     private int maxGap;
+
+    @Option(names = {"--strict"}, description = "Strict mode: do not allow single copy regions to start inside bases covered by a preceding duplicated k-mer [default: false]", defaultValue = "false")
+    private boolean strict;
+
     public Anchors() {}
 
+    // existing signature kept for backward compatibility
     public Anchors(Path input, Path output, int kmerSize, int minCount, int minLength, int maxGap, int threads) {
+        this(input, output, kmerSize, minCount, minLength, maxGap, threads, false);
+    }
+
+    public Anchors(Path input, Path output, int kmerSize, int minCount, int minLength, int maxGap, int threads, boolean strict) {
         this.input = input;
         this.output = output;
         this.kmerSize = kmerSize;
@@ -58,11 +67,12 @@ public class Anchors implements Callable<Integer>, Runnable {
         this.minLength = minLength;
         this.maxGap = maxGap;
         this.threads = threads;
+        this.strict = strict;
     }
 
     @Override
     public Integer call() throws Exception {
-        extractSingleCopyRegions(input, output, kmerSize, minCount, minLength, maxGap, threads);
+        extractSingleCopyRegions(input, output, kmerSize, minCount, minLength, maxGap, threads, strict);
         return 0;
     }
 
@@ -76,7 +86,7 @@ public class Anchors implements Callable<Integer>, Runnable {
         }
     }
 
-    private void extractSingleCopyRegions(Path input, Path output, int kmerSize, int minCount, int minLength, int maxGap, int threads) throws IOException {
+    private void extractSingleCopyRegions(Path input, Path output, int kmerSize, int minCount, int minLength, int maxGap, int threads, boolean strict) throws IOException {
         validateInputs();
 
         List<Path> tempFastaFiles = new ArrayList<>();
@@ -136,7 +146,7 @@ public class Anchors implements Callable<Integer>, Runnable {
                 tempFastaFiles.add(tempFastaFile);
                 tempBedFiles.add(tempBedFile);
 
-                futures.add(executor.submit(() -> processChrom(fasta, kmc, tempFastaFile, tempBedFile, minCount, minLength, maxGap)));
+                futures.add(executor.submit(() -> processChrom(fasta, kmc, tempFastaFile, tempBedFile, minCount, minLength, maxGap, strict)));
             }
 
             executor.shutdown();
@@ -164,7 +174,7 @@ public class Anchors implements Callable<Integer>, Runnable {
         FileUtils.rmFile(Path.of(kmcPrefix.toString() + ".kmc.log"));
     }
 
-    private void processChrom(Fasta fasta, KMC kmc, Path tempFastaFile, Path tempBedFile, int minCount, int minLength, int maxGap) {
+    private void processChrom(Fasta fasta, KMC kmc, Path tempFastaFile, Path tempBedFile, int minCount, int minLength, int maxGap, boolean strict) {
         String chrom = fasta.getName();
         int kmerLen = kmc.getKmerLength();
         KmerIterator it = fasta.kmers(kmerLen, kmc.getPrefixLength(), kmc.isBothStrands());
@@ -176,6 +186,7 @@ public class Anchors implements Callable<Integer>, Runnable {
         int start = -1;
         int end = -1;
         int lastKmerPos = -1;
+        int dupEnd = -1;   // strict mode: exclusive end of the last duplicated k-mer
 
         List<Region> regions = new ArrayList<>();
         String sequence = fasta.getSequence();
@@ -194,39 +205,40 @@ public class Anchors implements Callable<Integer>, Runnable {
                 }
             }
 
+            int pos = kp.getStartPos();
             int count = kmc.getCount(kp.getKmer());
             boolean isSingleCopy = (count < minCount);
 
             if (isSingleCopy) {
                 if (start == -1) {
-                    // Start a new region
-                    start = kp.getStartPos();
-                } else if (kp.getStartPos() > lastKmerPos + 1) {
+                    // strict: don't start inside bases covered by a preceding duplicated k-mer
+                    start = strict ? Math.max(pos, dupEnd) : pos;
+                } else if (pos > lastKmerPos + 1) {
                     // Invalid k-mer or gap encountered: force-split the single copy region
                     if (end - start >= minLength) {
                         regions.add(new Region(start, end));
                     }
-                    start = kp.getStartPos();
+                    start = strict ? Math.max(pos, dupEnd) : pos;
                 }
-                end = kp.getStartPos() + kmerLen;
+                end = pos + kmerLen;
             } else {
-                // High count k-mer: close current region if active
+                // Duplicated k-mer: close current region if active
                 if (start != -1 && end != -1) {
+                    // strict: cut off the bases covered by this duplicated k-mer
+                    if (strict) {
+                        end = Math.min(end, pos);
+                    }
                     if (end - start >= minLength) {
                         regions.add(new Region(start, end));
                     }
                     start = -1;
                     end = -1;
                 }
+                if (strict) {
+                    dupEnd = pos + kmerLen;
+                }
             }
-            lastKmerPos = kp.getStartPos();
-        }
-
-        // Handle the last region if it exists
-        if (start != -1 && end != -1) {
-            if (end - start >= minLength) {
-                regions.add(new Region(start, end));
-            }
+            lastKmerPos = pos;
         }
 
         Logger.info(CLASS_NAME, "Found " + regions.size() + " single copy regions for chromosome " + chrom + " before merging (minLength: " + minLength + ").");
