@@ -5,6 +5,8 @@ import edu.tamu.pg.pang2p.Utils.*;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 
+import java.io.BufferedWriter;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -77,7 +79,8 @@ public class Anchors implements Callable<Integer>, Runnable {
     private void extractSingleCopyRegions(Path input, Path output, int kmerSize, int minCount, int minLength, int maxGap, int threads) throws IOException {
         validateInputs();
 
-        List<Path> tempFiles = new ArrayList<>();
+        List<Path> tempFastaFiles = new ArrayList<>();
+        List<Path> tempBedFiles = new ArrayList<>();
         Path kmcPrefix;
         switch (FileUtils.getExtension(input.toString())) {
             case ".fasta":
@@ -112,23 +115,28 @@ public class Anchors implements Callable<Integer>, Runnable {
             List<Future<?>> futures = new ArrayList<>();
 
             for (Fasta fasta : fastaReader) {
-                Path tempFile;
+                Path tempFastaFile;
+                Path tempBedFile;
                 switch (FileUtils.getExtension(output.toString())) {
                     case ".fasta":
-                        tempFile = Path.of(FileUtils.replaceExtension(output, ".fasta", "." + fasta.getName() + ".tmp"));
+                        tempFastaFile = Path.of(FileUtils.replaceExtension(output, ".fasta", "." + fasta.getName() + ".tmp"));
+                        tempBedFile = Path.of(FileUtils.replaceExtension(output, ".fasta", "." + fasta.getName() + ".tmp.bed"));
                         break;
                     case ".fa":
-                        tempFile = Path.of(FileUtils.replaceExtension(output, ".fa", "." + fasta.getName() + ".tmp"));
+                        tempFastaFile = Path.of(FileUtils.replaceExtension(output, ".fa", "." + fasta.getName() + ".tmp"));
+                        tempBedFile = Path.of(FileUtils.replaceExtension(output, ".fa", "." + fasta.getName() + ".tmp.bed"));
                         break;
                     case ".fna":
-                        tempFile = Path.of(FileUtils.replaceExtension(output, ".fna", "." + fasta.getName() + ".tmp"));
+                        tempFastaFile = Path.of(FileUtils.replaceExtension(output, ".fna", "." + fasta.getName() + ".tmp"));
+                        tempBedFile = Path.of(FileUtils.replaceExtension(output, ".fna", "." + fasta.getName() + ".tmp.bed"));
                         break;
                     default:
                         throw new IllegalArgumentException("Output file must have .fasta or .fa or .fna extension.");
                 }
-                tempFiles.add(tempFile);
+                tempFastaFiles.add(tempFastaFile);
+                tempBedFiles.add(tempBedFile);
 
-                futures.add(executor.submit(() -> processChrom(fasta, kmc, tempFile, minCount, minLength, maxGap)));
+                futures.add(executor.submit(() -> processChrom(fasta, kmc, tempFastaFile, tempBedFile, minCount, minLength, maxGap)));
             }
 
             executor.shutdown();
@@ -147,14 +155,16 @@ public class Anchors implements Callable<Integer>, Runnable {
         // Clean up residual progress bar line when all tasks complete
         Logger.clearProgress();
 
-        FileUtils.catFiles(tempFiles, output);
-        FileUtils.rmFiles(tempFiles);
+        FileUtils.catFiles(tempFastaFiles, output);
+        FileUtils.catFiles(tempBedFiles, Path.of(FileUtils.replaceExtension(output, FileUtils.getExtension(output.toString()), ".bed")));
+        FileUtils.rmFiles(tempFastaFiles);
+        FileUtils.rmFiles(tempBedFiles);
         FileUtils.rmFile(Path.of(kmcPrefix.toString() + ".kmc_pre"));
         FileUtils.rmFile(Path.of(kmcPrefix.toString() + ".kmc_suf"));
         FileUtils.rmFile(Path.of(kmcPrefix.toString() + ".kmc.log"));
     }
 
-    private void processChrom(Fasta fasta, KMC kmc, Path tempFile, int minCount, int minLength, int maxGap) {
+    private void processChrom(Fasta fasta, KMC kmc, Path tempFastaFile, Path tempBedFile, int minCount, int minLength, int maxGap) {
         String chrom = fasta.getName();
         int kmerLen = kmc.getKmerLength();
         KmerIterator it = fasta.kmers(kmerLen, kmc.getPrefixLength(), kmc.isBothStrands());
@@ -230,10 +240,12 @@ public class Anchors implements Callable<Integer>, Runnable {
         Logger.info(CLASS_NAME, "Found " + mergedRegions.size() + " single copy regions for chromosome " + chrom + " after merging (maxGap: " + maxGap + ").");
 
         // Write the final merged regions to the file
-        try (FastaWriter writer = new FastaWriter(tempFile.toString(), false)) {
+        try (FastaWriter writer = new FastaWriter(tempFastaFile.toString(), false);
+        BufferedWriter bw = new BufferedWriter(new FileWriter(tempBedFile.toString(), false))) {
             int numRegions = 0;
             for (Region r : mergedRegions) {
                 writer.write(new Fasta(numRegions, chrom + "_" + numRegions, sequence.substring(r.start, r.end), chrom + ":" + r.start + "-" + r.end), true);
+                bw.write(chrom + "\t" + r.start + "\t" + r.end + "\t" + chrom + "_" + numRegions + "\n");
                 numRegions++;
             }
         } catch (IOException e) {
