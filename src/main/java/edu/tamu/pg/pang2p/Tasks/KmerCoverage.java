@@ -38,6 +38,9 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     @Option(names = {"-m", "--min_count"}, description = "Minimum count for k-mer coverage calculation [1]", required = false)
     private int minCount = 1;
 
+    @Option(names = {"--skip"}, description = "Only consider every Nth k-mer of each sequence (1 = every k-mer) [1]", required = false)
+    private int skip = 1;
+
     @Option(names = {"--memory"}, description = "Should the kmc db loaded into memory", required = false)
     private boolean memory = false;
 
@@ -53,12 +56,12 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     }
 
     // Parameterized constructor for programmatically calling this task
-    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, boolean memory){
-        this(referenceFasta, sampleName, inputFiles, outputFile, kmerSize, threads, minCount, memory, false);
+    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, int skip, boolean memory){
+        this(referenceFasta, sampleName, inputFiles, outputFile, kmerSize, threads, minCount, skip, memory, false);
     }
 
     // Parameterized constructor for programmatically calling this task
-    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, boolean memory, boolean keepKmc) {
+    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, int skip, boolean memory, boolean keepKmc) {
         this.referenceFasta = referenceFasta;
         this.sampleName = sampleName;
         this.inputFiles = inputFiles;
@@ -67,6 +70,7 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         this.threads = threads;
         this.minCount = minCount;
         this.memory = memory;
+        this.skip = skip;
         this.keepKmc = keepKmc;
     }
 
@@ -189,11 +193,18 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         int totalKmers = 0;
         int obsKmers = 0;
         int obsTotalKmers = 0;
+        long kmerIndex = 0;
 
         Set<Kmer> walkedKmers = new HashSet<>();
 
         while (it.hasNext()) {
             KmerPosition kp = it.next();
+
+            // Only look at every `skip`-th k-mer (skip = 1 keeps all of them)
+            if (kmerIndex++ % skip != 0) {
+                continue;
+            }
+
             Kmer kmer = kp.getKmer();
             totalKmers++;
 
@@ -235,6 +246,9 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         }
         if (kmerSize <= 0 && kmerSize % 2 == 0) {
             Logger.error(CLASS_NAME, "K-mer size should be greater than 0 and odd");
+        }
+        if (skip < 1) {
+            Logger.error(CLASS_NAME, "Skip should be at least 1");
         }
     }
 

@@ -33,6 +33,9 @@ public class Genotype implements Callable<Integer>, Runnable {
     @Option(names = {"-m", "--min_count"}, description = "Minimum count for k-mer coverage calculation [1]", required = false, defaultValue = "1")
     private int minCount = 1;
 
+    @Option(names = {"--skip"}, description = "Process every `skip`-th k-mer for coverage calculation [1]", required = false, defaultValue = "1")
+    private int skip = 1;
+
     @Option(names = {"--memory"}, description = "Load the KMC database into memory [false]", required = false, defaultValue = "false")
     private boolean memory = false;
 
@@ -101,6 +104,7 @@ public class Genotype implements Callable<Integer>, Runnable {
                     kmerSize,
                     threads,
                     minCount,
+                    skip,
                     memory,
                     keepKmc
             );
