@@ -293,43 +293,89 @@ public class KMC implements AutoCloseable {
 
     }
 
+//    /***
+//     * Get the count of a kmer from the KMC database
+//     */
+//    public int getCount(Kmer kmer) {
+//        // get the signature, prefix, and suffix from the kmer
+//        long start, end;
+//        int signature = kmer.getSignature(this.signatureReference);
+//        int prefix = kmer.getPrefixFwd();
+//        byte[] suffix = kmer.getSuffixFwd();
+//
+//        // calculate the start and end indices in the prefix array
+//        int signatureIndex = signatureMap[signature] * lutPrefixArraySize;
+//        start = prefixArray[signatureIndex + prefix];
+//        if (signatureIndex + prefix + 1 >= prefixArray.length) {
+//            end = totalKmers - 1;
+//        }
+//        else {
+//            end = prefixArray[signatureIndex + prefix + 1] - 1;
+//        }
+//
+//        // perform binary search to find the matching suffix
+//        while (start <= end) {
+//            long mid = (start + end) / 2;
+//            byte[] entry = getEntry(mid); // retrieve the entry for the current index
+//            byte[] suffixFromEntry = getSuffixFromEntry(entry);
+//
+//            int comparison = HelperFunctions.compareByteArray(suffix, suffixFromEntry);
+//            if (comparison < 0) {
+//                end = mid - 1; // move the search range down
+//            } else if (comparison > 0) {
+//                start = mid + 1; // move the search range up
+//            } else {
+//                return getCountFromEntry(entry); // Match found, return count
+//            }
+//        }
+//
+//        return 0;
+//    }
+
     /***
-     * Get the count of a kmer from the KMC database
+     * Get the 0-based rank (index) of a kmer in the KMC suffix file, or -1 if not found.
      */
-    public int getCount(Kmer kmer) {
-        // get the signature, prefix, and suffix from the kmer
+    public long getIndex(Kmer kmer) {
         long start, end;
         int signature = kmer.getSignature(this.signatureReference);
         int prefix = kmer.getPrefixFwd();
         byte[] suffix = kmer.getSuffixFwd();
 
-        // calculate the start and end indices in the prefix array
         int signatureIndex = signatureMap[signature] * lutPrefixArraySize;
         start = prefixArray[signatureIndex + prefix];
         if (signatureIndex + prefix + 1 >= prefixArray.length) {
             end = totalKmers - 1;
-        }
-        else {
+        } else {
             end = prefixArray[signatureIndex + prefix + 1] - 1;
         }
 
-        // perform binary search to find the matching suffix
         while (start <= end) {
-            long mid = (start + end) / 2;
-            byte[] entry = getEntry(mid); // retrieve the entry for the current index
+            long mid = (start + end) >>> 1; // overflow-safe midpoint
+            byte[] entry = getEntry(mid);
             byte[] suffixFromEntry = getSuffixFromEntry(entry);
 
             int comparison = HelperFunctions.compareByteArray(suffix, suffixFromEntry);
             if (comparison < 0) {
-                end = mid - 1; // move the search range down
+                end = mid - 1;
             } else if (comparison > 0) {
-                start = mid + 1; // move the search range up
+                start = mid + 1;
             } else {
-                return getCountFromEntry(entry); // Match found, return count
+                return mid; // 0-based k-mer index in .kmc_suf
             }
         }
 
-        return 0;
+        return -1L; // Not found
+    }
+
+    /***
+     * Get the count of a kmer from the KMC database
+     */
+    public int getCount(Kmer kmer) {
+        long index = getIndex(kmer);
+        if (index < 0) {
+            return 0;
+        }
+        return getCountFromEntry(getEntry(index));
     }
 
     /***
