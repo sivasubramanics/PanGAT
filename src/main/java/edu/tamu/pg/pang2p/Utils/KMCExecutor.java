@@ -83,7 +83,7 @@ public class KMCExecutor {
                 "-k" + config.getKmerSize(),
                 "-p" + config.getSignatureLength(),
                 "-ci" + config.getMinCount(),
-                "-cx" + config.getMaxCount(),
+                "-cs" + config.getMaxCount(),
                 "-t" + config.getThreads(),
                 "-m" + (int) config.getMaxMemory(),
                 config.getInputFormat().getFlag(),
