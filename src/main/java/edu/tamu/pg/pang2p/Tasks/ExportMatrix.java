@@ -37,8 +37,8 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
     @Option(names = {"--max-heterozygosity"}, description = "Maximum heterozygosity for filtering markers [0.5]", required = false, defaultValue = "0.5")
     private double maxHeterozygosity;
 
-    @Option(names = {"--cv"}, description = "CV cutoff for filtering markers [0.3]", required = false, defaultValue = "0.3")
-    private double cvCutoff;
+    @Option(names = {"--cv"}, description = "CV cutoff for filtering markers [0.3]", required = false)
+    private double cvCutoff = 0.3;
 
     @Option(names = {"--gapit"}, description = "Convert output to GAPIT format (requires R and GAPIT installed).", required = false, defaultValue = "false")
     private boolean gapit = false;
@@ -97,10 +97,10 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
                 if (line.startsWith("#")) {
                     String[] header = line.split("\t");
-                    totalSamplesInHeader = header.length - 13;
+                    totalSamplesInHeader = header.length - 15;
 
                     List<Integer> indexList = new ArrayList<>();
-                    for (int i = 13; i < header.length; i++) {
+                    for (int i = 15; i < header.length; i++) {
                         String genotypeId = header[i];
                         if (includeGenotypes != null && !includeGenotypes.contains(genotypeId)) continue;
                         if (excludeGenotypes != null && excludeGenotypes.contains(genotypeId)) continue;
@@ -125,7 +125,7 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
                 totalMarkers++;
 
-                boolean cvFailed = Double.parseDouble(tokens[12]) < cvCutoff;
+                boolean cvFailed = Double.parseDouble(tokens[14]) < cvCutoff;
                 if (cvFailed) {
                     failedCV++;
                 }

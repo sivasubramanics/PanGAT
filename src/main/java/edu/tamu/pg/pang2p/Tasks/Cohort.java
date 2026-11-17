@@ -75,7 +75,7 @@ public class Cohort implements Runnable, Callable<Integer> {
         panHap.addParameter("numHaps", String.valueOf(panHap.getHapNum()));
 
         for (int i = 0; i < input.length; i++) {
-            panHap.addSample(samples[i], input[i]);
+            panHap.addCountFile(samples[i], input[i]);
         }
 
         panHap.writePanMatrix(panMatrixFile, cvCutoff);

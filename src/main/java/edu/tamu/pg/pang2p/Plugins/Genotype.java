@@ -2,7 +2,7 @@ package edu.tamu.pg.pang2p.Plugins;
 
 import edu.tamu.pg.pang2p.Tasks.Cohort;
 import edu.tamu.pg.pang2p.Tasks.DirectoryStructure;
-import edu.tamu.pg.pang2p.Tasks.KmerCoverage;
+import edu.tamu.pg.pang2p.Tasks.ReadCounts;
 import edu.tamu.pg.pang2p.Utils.HelperFunctions;
 import edu.tamu.pg.pang2p.Utils.Logger;
 import picocli.CommandLine;
@@ -21,6 +21,9 @@ public class Genotype implements Callable<Integer>, Runnable {
     @Option(names = {"-b", "--basedir"}, description = "Base directory for the output", required = true)
     private Path baseDir;
 
+    @Option(names = {"-n", "--name"}, description = "Name for this dataset", required = true)
+    private String name;
+
     @Option(names = {"-s", "--samples"}, description = "Path to the samples CSV file (format: id,path)", required = true)
     private Path samplesFile;
 
@@ -30,26 +33,21 @@ public class Genotype implements Callable<Integer>, Runnable {
     @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing [2]", required = false, defaultValue = "2")
     private int threads = 2;
 
-    @Option(names = {"-m", "--min_count"}, description = "Minimum count for k-mer coverage calculation [1]", required = false, defaultValue = "1")
-    private int minCount = 1;
+    @Option(names = {"--relax"}, description = "Skip remaining kmers in a read once a matching kmer is found", required = false)
+    private boolean relax = false;
 
     @Option(names = {"--skip"}, description = "Process every `skip`-th k-mer for coverage calculation [1]", required = false, defaultValue = "1")
     private int skip = 1;
-
-    @Option(names = {"--memory"}, description = "Load the KMC database into memory [false]", required = false, defaultValue = "false")
-    private boolean memory = false;
-
-    @Option(names = {"--keep-kmc"}, description = "Keep the KMC database files after processing [false]", required = false, defaultValue = "false")
-    private boolean keepKmc = false;
 
     private final String CLASS_NAME = this.getClass().getSimpleName();
 
     public Genotype() {
     }
 
-    public Genotype(Path baseDir, Path samplesFile, int threads) {
+    public Genotype(Path baseDir, Path samplesFile, String name, int threads) {
         this.baseDir = baseDir;
         this.samplesFile = samplesFile;
+        this.name = name;
         this.threads = threads;
     }
 
@@ -91,26 +89,25 @@ public class Genotype implements Callable<Integer>, Runnable {
 
         for (String sampleName : sampleNames) {
             Set<Path> inputPaths = sampleMap.get(sampleName);
-            Path outputCovFile = dirs.getGenotypeDir().resolve(sampleName + ".cov.tsv");
+            List<Path> inputList = new ArrayList<>(inputPaths);
+            Path outputCovFile = dirs.getGenotypeDir(name).resolve(sampleName + ".cov.tsv");
+            Files.createDirectories(outputCovFile.getParent());
             coverageFiles.add(outputCovFile);
 
             Logger.info(CLASS_NAME, "Calculating k-mer coverage for sample: " + sampleName);
 
-            KmerCoverage kmerCoverage = new KmerCoverage(
+            ReadCounts countReads = new ReadCounts(
                     referenceFile,
-                    sampleName,
-                    inputPaths.toArray(new Path[0]),
+                    inputList,
                     outputCovFile,
                     kmerSize,
                     threads,
-                    minCount,
-                    skip,
-                    memory,
-                    keepKmc
+                    relax,
+                    skip
             );
 
             try {
-                kmerCoverage.call();
+                countReads.call();
             } catch (Exception e) {
                 Logger.error(CLASS_NAME, "Failed to compute coverage for sample: " + sampleName + " - " + e.getMessage());
             }
@@ -121,7 +118,7 @@ public class Genotype implements Callable<Integer>, Runnable {
                 dirs.getPanClustersRepFile(),
                 coverageFiles.toArray(new Path[0]),
                 sampleNames.toArray(new String[0]),
-                dirs.getCohortBase(),
+                dirs.getCohortBase(name),
                 true
         );
         cohort.run();
@@ -176,9 +173,6 @@ public class Genotype implements Callable<Integer>, Runnable {
         }
         if (kmerSize <= 0 || kmerSize % 2 == 0) {
             Logger.error(CLASS_NAME, "K-mer size must be a positive odd integer.");
-        }
-        if (minCount < 1) {
-            Logger.error(CLASS_NAME, "Minimum k-mer count must be at least 1.");
         }
     }
 }

@@ -16,6 +16,7 @@ public class FileUtils {
 
     /***
      * Create directory on the file system recursively (something like mkdir -p dirName)
+     *
      * @param dir
      * @return
      * @throws IOException
@@ -346,4 +347,28 @@ public class FileUtils {
         return isFastqFile(file.toString());
     }
 
+    /**
+     * Infers the input file format ("fasta", "fastq", or "list") based on file extensions.
+     * Returns null if the format/extension is unsupported.
+     */
+    public static String determineInputFormat(String fileName) {
+        if (fileName == null) return null;
+        String lower = fileName.toLowerCase();
+
+        if (lower.endsWith(".fa") || lower.endsWith(".fasta") || lower.endsWith(".fna") ||
+                lower.endsWith(".fa.gz") || lower.endsWith(".fasta.gz") || lower.endsWith(".fna.gz")) {
+            return "fasta";
+        } else if (lower.endsWith(".fq") || lower.endsWith(".fastq") ||
+                lower.endsWith(".fq.gz") || lower.endsWith(".fastq.gz")) {
+            return "fastq";
+        } else if (lower.endsWith(".list")) {
+            return "list";
+        }
+        return null;
+    }
+
+    public static String determineInputFormat(Path filePath) {
+        if (filePath == null || filePath.getFileName() == null) return null;
+        return determineInputFormat(filePath.getFileName().toString());
+    }
 }

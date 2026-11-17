@@ -30,30 +30,30 @@ public class ReadCounts implements Callable<Integer>, Runnable {
     @Option(names = {"-i", "--input"}, description = "Input reads file path(s)", required = true, split = ",", arity = "1..*")
     private List<Path> inputFiles;
 
-    @Option(names = {"-f", "--format"}, description = "Input reads file format (fq or fa or list)", required = true)
-    private String inputFileFormat;
-
     @Option(names = {"-t", "--threads"}, description = "Number of threads to use", required = false)
     private int nthreads = 1;
 
     @Option(names = {"-o", "--output"}, description = "Output file path", required = true)
-    private String outputFile;
+    private Path outputFile;
 
     @Option(names = {"--relax"}, description = "Skip remaining kmers in a read once a matching kmer is found", required = false)
     private boolean relax = false;
+
+    @Option(names = {"--skip"}, description = "Step interval for sampling reference kmers (e.g., 5 for every 5th kmer: 1st, 6th, 11th)", required = false)
+    private int skip = 1;
 
     private String CLASS_NAME = ReadCounts.class.getSimpleName();
 
     public ReadCounts() {}
 
-    public ReadCounts(Path refFastaFile, int kmerSize, List<Path> inputFiles, String inputFileFormat, int nthreads, String outputFile, boolean relax) {
+    public ReadCounts(Path refFastaFile, List<Path> inputFiles, Path outputFile, int kmerSize, int nthreads, boolean relax, int skip) {
         this.refFastaFile = refFastaFile;
         this.kmerSize = kmerSize;
         this.inputFiles = inputFiles;
-        this.inputFileFormat = inputFileFormat;
         this.nthreads = nthreads;
         this.outputFile = outputFile;
         this.relax = relax;
+        this.skip = skip;
     }
 
     @Override
@@ -95,9 +95,9 @@ public class ReadCounts implements Callable<Integer>, Runnable {
             KMCExecutor.run(kmcConfig);
         }
 
-        Map<Path, String> validFilesMap = parseInputFiles(inputFiles, inputFileFormat);
+        Map<Path, String> validFilesMap = parseInputFiles(inputFiles);
         if (validFilesMap == null) {
-            Logger.error(CLASS_NAME, "Input files are not valid. Please check the file paths and formats.");
+            Logger.error(CLASS_NAME, "Input files are not valid. Please check the file paths and extensions.");
             return;
         }
 
@@ -115,6 +115,7 @@ public class ReadCounts implements Callable<Integer>, Runnable {
             }
 
             AtomicLong totalReadsProcessed = new AtomicLong(0);
+            AtomicLong matchedReads = new AtomicLong(0); // <--- Added counter for matched reads
             long reportingInterval = 1_000_000;
 
             ExecutorService executor = Executors.newFixedThreadPool(nthreads);
@@ -136,7 +137,7 @@ public class ReadCounts implements Callable<Integer>, Runnable {
                         if (batch.size() >= batchSize) {
                             List<Read> batchToProcess = new ArrayList<>(batch);
                             readFutures.add(executor.submit(() -> {
-                                processReadBatch(batchToProcess, kmc, kmerCountChunks, chunkSize, totalReadsProcessed, reportingInterval, relax);
+                                processReadBatch(batchToProcess, kmc, kmerCountChunks, chunkSize, totalReadsProcessed, matchedReads, reportingInterval, relax);
                                 return null;
                             }));
                             batch.clear();
@@ -146,7 +147,7 @@ public class ReadCounts implements Callable<Integer>, Runnable {
                     if (!batch.isEmpty()) {
                         List<Read> batchToProcess = new ArrayList<>(batch);
                         readFutures.add(executor.submit(() -> {
-                            processReadBatch(batchToProcess, kmc, kmerCountChunks, chunkSize, totalReadsProcessed, reportingInterval, relax);
+                            processReadBatch(batchToProcess, kmc, kmerCountChunks, chunkSize, totalReadsProcessed, matchedReads, reportingInterval, relax);
                             return null;
                         }));
                     }
@@ -161,13 +162,29 @@ public class ReadCounts implements Callable<Integer>, Runnable {
             }
 
             executor.shutdown();
-            Logger.info(CLASS_NAME, "Finished processing all input files sequentially. Total reads processed: " + totalReadsProcessed.get());
+
+            // --- PRINT READ STATISTICS SUMMARY ---
+            long total = totalReadsProcessed.get();
+            long matched = matchedReads.get();
+            long unmatched = total - matched;
+            double matchPct = total > 0 ? (double) matched / total * 100.0 : 0.0;
+            double unmatchPct = total > 0 ? (double) unmatched / total * 100.0 : 0.0;
+
+            Logger.info(CLASS_NAME, "==================================================");
+            Logger.info(CLASS_NAME, "               READ COUNTING SUMMARY              ");
+            Logger.info(CLASS_NAME, "==================================================");
+            Logger.info(CLASS_NAME, "Total reads processed       : " + String.format("%,d", total));
+            Logger.info(CLASS_NAME, "Reads with k-mer matching   : " + String.format("%,d (%.2f%%)", matched, matchPct));
+            Logger.info(CLASS_NAME, "Unmatched reads             : " + String.format("%,d (%.2f%%)", unmatched, unmatchPct));
+            Logger.info(CLASS_NAME, "==================================================");
 
             // 1. Set up a thread pool for processing the reference fasta records with correct sequence metrics
             ExecutorService writerExecutor = Executors.newFixedThreadPool(nthreads);
             List<Future<String>> writeFutures = new ArrayList<>();
 
-            Logger.info(CLASS_NAME, "Calculating sequence statistics and anchor counts...");
+            Logger.info(CLASS_NAME, "Calculating sequence statistics and anchor counts (with skip step = " + skip + ")...");
+            int effectiveSkip = Math.max(1, skip);
+
             try (FastaReader reader = new FastaReader(refFastaFile)) {
                 for (Fasta fasta : reader) {
                     writeFutures.add(writerExecutor.submit(() -> {
@@ -177,17 +194,24 @@ public class ReadCounts implements Callable<Integer>, Runnable {
                         // Use a Set to track distinct unique canonical k-mers in this sequence
                         java.util.Set<Kmer> uniqueKmersSet = new java.util.HashSet<>();
 
+                        long kmerIndexInSeq = 0;
                         while (it.hasNext()) {
                             Kmer kmer = it.next().getKmer();
                             totalKmersSeq++;
-                            uniqueKmersSet.add(kmer); // HashSet deduplicates identical canonical k-mers
+
+                            // Only add to uniqueKmersSet if it matches the skip step (e.g., 0, 5, 10 -> 1st, 6th, 11th)
+                            if (kmerIndexInSeq % effectiveSkip == 0) {
+                                uniqueKmersSet.add(kmer);
+                            }
+                            kmerIndexInSeq++;
                         }
 
                         long uniqueKmersSeq = uniqueKmersSet.size();
                         long uniqueKmersCountEq1Seq = 0;
+                        long coveredKmersSeq = 0;
                         long countedReadsSeq = 0;
 
-                        // Evaluate each unique sequence k-mer against the KMC database
+                        // Evaluate each unique sampled sequence k-mer against the KMC database
                         for (Kmer kmer : uniqueKmersSet) {
                             long kmerIndex = kmc.getIndex(kmer);
                             if (kmerIndex >= 0) {
@@ -199,26 +223,32 @@ public class ReadCounts implements Callable<Integer>, Runnable {
 
                                     int chunkIndex = (int) (kmerIndex / chunkSize);
                                     int indexInChunk = (int) (kmerIndex % chunkSize);
-                                    countedReadsSeq += kmerCountChunks[chunkIndex].get(indexInChunk);
+                                    int readCountForKmer = kmerCountChunks[chunkIndex].get(indexInChunk);
+
+                                    countedReadsSeq += readCountForKmer;
+
+                                    if (readCountForKmer > 0) {
+                                        coveredKmersSeq++;
+                                    }
                                 }
                             }
                         }
 
-                        // Format: id, length, totalKmer, uniqueKmer, uniqueKmer with kmcdbcount==1, countedReads
-                        return String.format("%s\t%d\t%d\t%d\t%d\t%d",
+                        // Format: id, length, totalKmer, uniqueKmer, uniqueKmer with kmcdbcount==1, coveredKmers, countedReads
+                        return String.format("%s\t%d\t%d\t%d\t%d\t%d\t%d",
                                 fasta.getName(),
                                 fasta.getLength(),
                                 totalKmersSeq,
                                 uniqueKmersSeq,
                                 uniqueKmersCountEq1Seq,
+                                coveredKmersSeq,
                                 countedReadsSeq);
                     }));
                 }
             }
 
-            try (BufferedWriter writer = Files.newBufferedWriter(Path.of(outputFile))) {
-                // Optional header for clarity
-                writer.write("SequenceID\tLength\tTotalKmers\tUniqueKmers\tUniqueKmersSingleCopy\tNumReads\n");
+            try (BufferedWriter writer = Files.newBufferedWriter(outputFile)) {
+                writer.write("HapID\tLength\tTotalKmers\tUniqueKmers\tUniqueKmersSingleCopy\tCoveredKmers\tNumReads\n");
 
                 for (Future<String> future : writeFutures) {
                     try {
@@ -236,7 +266,8 @@ public class ReadCounts implements Callable<Integer>, Runnable {
     }
 
     private void processReadBatch(List<Read> batch, KMC kmc, AtomicIntegerArray[] kmerCountChunks,
-                                  int chunkSize, AtomicLong totalReadsProcessed, long reportingInterval, boolean relax) {
+                                  int chunkSize, AtomicLong totalReadsProcessed, AtomicLong matchedReads,
+                                  long reportingInterval, boolean relax) {
         int kmerSize = kmc.getKmerLength();
         int prefixLength = kmc.getPrefixLength();
 
@@ -247,11 +278,14 @@ public class ReadCounts implements Callable<Integer>, Runnable {
             Logger.info(CLASS_NAME, "Processed " + (currentTotal / 1_000_000) + "M reads...");
         }
 
+        long matchedInBatch = 0;
+
         for (Read read : batch) {
+            boolean matchedThisRead = false;
             KmerIterator it = read.kmers(kmerSize, prefixLength, true);
+
             while (it.hasNext()) {
                 Kmer kmer = it.next().getKmer();
-
                 long kmerIndex = kmc.getIndex(kmer);
 
                 if (kmerIndex >= 0) {
@@ -263,17 +297,25 @@ public class ReadCounts implements Callable<Integer>, Runnable {
                         int indexInChunk = (int) (kmerIndex % chunkSize);
                         kmerCountChunks[chunkIndex].incrementAndGet(indexInChunk);
 
-                        // skip the read if relax is true and a matching kmer is found
+                        matchedThisRead = true;
+
+                        // skip the rest of the read's kmers if relax is true and a matching kmer is found
                         if (relax) {
                             break;
                         }
                     }
                 }
             }
+
+            if (matchedThisRead) {
+                matchedInBatch++;
+            }
         }
+
+        matchedReads.addAndGet(matchedInBatch);
     }
 
-    private Map<Path, String> parseInputFiles(List<Path> files, String defaultFormat) {
+    private Map<Path, String> parseInputFiles(List<Path> files) {
         if (files == null || files.isEmpty()) {
             Logger.error(CLASS_NAME, "Input files list is empty.");
             return null;
@@ -281,14 +323,18 @@ public class ReadCounts implements Callable<Integer>, Runnable {
 
         Map<Path, String> resolvedFilesMap = new HashMap<>();
 
-        if (defaultFormat.equalsIgnoreCase("list")) {
-            for (Path listFile : files) {
-                if (!Files.exists(listFile)) {
-                    Logger.error(CLASS_NAME, "Input list file not found: " + listFile);
-                    return null;
-                }
+        for (Path file : files) {
+            if (!Files.exists(file) || !Files.isRegularFile(file)) {
+                Logger.error(CLASS_NAME, "Input file does not exist or is not a regular file: " + file);
+                return null;
+            }
+
+            String fileName = file.getFileName().toString().toLowerCase();
+
+            // Check if it's a list file
+            if (fileName.endsWith(".list")) {
                 try {
-                    List<String> lines = Files.readAllLines(listFile);
+                    List<String> lines = Files.readAllLines(file);
                     for (String line : lines) {
                         line = line.trim();
                         if (line.isEmpty() || line.startsWith("#")) {
@@ -297,42 +343,34 @@ public class ReadCounts implements Callable<Integer>, Runnable {
 
                         String[] parts = line.split("\\s+");
                         Path readPath = Path.of(parts[0]);
-                        if (!readPath.isAbsolute() && listFile.getParent() != null) {
-                            readPath = listFile.getParent().resolve(readPath);
+                        if (!readPath.isAbsolute() && file.getParent() != null) {
+                            readPath = file.getParent().resolve(readPath);
                         }
 
-                        if (FileUtils.isFastaFile(readPath)) {
-                            resolvedFilesMap.put(readPath, "fasta");
-                        } else if (FileUtils.isFastqFile(readPath)) {
-                            resolvedFilesMap.put(readPath, "fastq");
-                        } else {
-                            Logger.error(CLASS_NAME, "Unsupported file format for input file: " + readPath);
+                        if (!Files.exists(readPath) || !Files.isRegularFile(readPath)) {
+                            Logger.error(CLASS_NAME, "Input read file from list does not exist: " + readPath);
                             return null;
                         }
+
+                        String resolvedFormat = FileUtils.determineInputFormat(readPath.getFileName().toString().toLowerCase());
+                        if (resolvedFormat == null) {
+                            Logger.error(CLASS_NAME, "Unsupported file format/extension in list for: " + readPath);
+                            return null;
+                        }
+                        resolvedFilesMap.put(readPath, resolvedFormat);
                     }
                 } catch (IOException e) {
-                    Logger.error(CLASS_NAME, "Error reading file list: " + listFile + " - " + e.getMessage());
+                    Logger.error(CLASS_NAME, "Error reading file list: " + file + " - " + e.getMessage());
                     return null;
                 }
-            }
-        } else {
-            for (Path file : files) {
-                if (FileUtils.isFastaFile(file)) {
-                    resolvedFilesMap.put(file, "fasta");
-                } else if (FileUtils.isFastqFile(file)) {
-                    resolvedFilesMap.put(file, "fastq");
-                } else {
-                    Logger.error(CLASS_NAME, "Unsupported file format for input file: " + file);
+            } else {
+                // Direct file check
+                String format = FileUtils.determineInputFormat(fileName);
+                if (format == null) {
+                    Logger.error(CLASS_NAME, "Unsupported file format extension for input file: " + file);
                     return null;
                 }
-            }
-        }
-
-        for (Map.Entry<Path, String> entry : resolvedFilesMap.entrySet()) {
-            Path file = entry.getKey();
-            if (!Files.exists(file) || !Files.isRegularFile(file)) {
-                Logger.error(CLASS_NAME, "Input read file does not exist or is invalid: " + file);
-                return null;
+                resolvedFilesMap.put(file, format);
             }
         }
 
