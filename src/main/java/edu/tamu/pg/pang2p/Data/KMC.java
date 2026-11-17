@@ -556,5 +556,9 @@ public class KMC implements AutoCloseable {
             return null;
         }
     }
+
+    public long getTotalKmers() {
+        return this.totalKmers;
+    }
 }
 //EOF

@@ -300,4 +300,50 @@ public class FileUtils {
         int lastDot = string.lastIndexOf('.');
         return lastDot == -1 ? "" : string.substring(lastDot);
     }
+
+    public static boolean isFastaFile(String refFastaFile) {
+        String lower = refFastaFile.toLowerCase();
+        return lower.endsWith(".fasta") || lower.endsWith(".fa") || lower.endsWith(".fna") ||
+                lower.endsWith(".fasta.gz") || lower.endsWith(".fa.gz") || lower.endsWith(".fna.gz");
+    }
+
+    public static boolean isFastaFile(Path refFastaFile) {
+        return isFastaFile(refFastaFile.toString());
+    }
+
+    public static Path replaceExtension(String inFile, String s) {
+        String newFileName = inFile.replaceAll("\\.[^.]+$", s);
+        return Path.of(newFileName);
+    }
+
+    public static Path replaceExtension(Path inFile, String s) {
+        String pathStr = inFile.toString();
+        String lower = pathStr.toLowerCase();
+
+        // Check for multi-part or standard fasta extensions and replace them cleanly
+        if (lower.endsWith(".fasta.gz")) {
+            pathStr = pathStr.substring(0, pathStr.length() - 9);
+        } else if (lower.endsWith(".fasta")) {
+            pathStr = pathStr.substring(0, pathStr.length() - 6);
+        } else if (lower.endsWith(".fna")) {
+            pathStr = pathStr.substring(0, pathStr.length() - 4);
+        } else if (lower.endsWith(".fa")) {
+            pathStr = pathStr.substring(0, pathStr.length() - 3);
+        } else {
+            // Fallback to standard last-extension replacement
+            pathStr = pathStr.replaceAll("\\.[^.]+$", "");
+        }
+
+        return Path.of(pathStr + s);
+    }
+
+    public static boolean isFastqFile(String file) {
+        String lower = file.toLowerCase();
+        return lower.endsWith(".fastq") || lower.endsWith(".fq") || lower.endsWith(".fastq.gz") || lower.endsWith(".fq.gz");
+    }
+
+    public static boolean isFastqFile(Path file) {
+        return isFastqFile(file.toString());
+    }
+
 }

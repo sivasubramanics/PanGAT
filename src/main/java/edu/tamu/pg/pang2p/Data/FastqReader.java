@@ -2,12 +2,7 @@ package edu.tamu.pg.pang2p.Data;
 
 import edu.tamu.pg.pang2p.Utils.Logger;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedReader;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Iterator;
@@ -19,7 +14,7 @@ public class FastqReader implements Iterable<Fastq>, AutoCloseable {
     private FastqIterator iterator;
 
     private final String CLASS_NAME = this.getClass().getSimpleName();
-    private static final int BUFFER_SIZE = 65536; // 64 KB buffer for efficient HPC/GPFS reads
+    private static final int BUFFER_SIZE = 128 * 1024; // 128 KB optimized for HPC parallel filesystems (Lustre/GPFS)
 
     public FastqReader(Path fastqPath) {
         this.fastqPath = fastqPath;
@@ -45,11 +40,10 @@ public class FastqReader implements Iterable<Fastq>, AutoCloseable {
         }
     }
 
-    private BufferedReader openReader(Path path) throws IOException {
+    private InputStream openStream(Path path) throws IOException {
         InputStream fileStream = new FileInputStream(path.toFile());
-        InputStream bufferedStream = new BufferedInputStream(fileStream, BUFFER_SIZE);
+        BufferedInputStream bufferedStream = new BufferedInputStream(fileStream, BUFFER_SIZE);
 
-        // Detect gzip by extension OR magic bytes (0x1f 0x8b)
         boolean isGzip = path.toString().toLowerCase().endsWith(".gz");
         if (!isGzip) {
             bufferedStream.mark(2);
@@ -59,43 +53,87 @@ public class FastqReader implements Iterable<Fastq>, AutoCloseable {
             isGzip = (b1 == 0x1f && b2 == 0x8b);
         }
 
-        InputStream finalStream = isGzip
+        return isGzip
                 ? new GZIPInputStream(bufferedStream, BUFFER_SIZE)
                 : bufferedStream;
-
-        return new BufferedReader(new InputStreamReader(finalStream, StandardCharsets.UTF_8), BUFFER_SIZE);
     }
 
     private class FastqIterator implements Iterator<Fastq>, AutoCloseable {
-        private String currentHeader;
-        private int sequenceId;
-        private BufferedReader reader;
-        private final StringBuilder seqBuilder = new StringBuilder();
-        private final StringBuilder qualBuilder = new StringBuilder();
+        private final InputStream inputStream;
+        private final byte[] readBuffer = new byte[BUFFER_SIZE];
+        private int bufferLength = 0;
+        private int bufferOffset = 0;
+        private boolean EOF = false;
+        private int sequenceId = 0;
+
+        private String nextHeader = null;
+        private final ByteArrayOutputStream lineCache = new ByteArrayOutputStream(512);
 
         public FastqIterator() {
+            InputStream tempStream = null;
             try {
-                reader = openReader(fastqPath);
-                currentHeader = nextNonEmptyLine();
-                sequenceId = 0;
+                tempStream = openStream(fastqPath);
             } catch (IOException e) {
                 Logger.error(CLASS_NAME, "Error opening file: " + fastqPath + " (" + e.getMessage() + ")");
             }
+            this.inputStream = tempStream;
+            try {
+                advanceToNextHeader();
+            } catch (IOException e) {
+                Logger.error(CLASS_NAME, "Error initializing FASTQ iterator: " + e.getMessage());
+                nextHeader = null;
+            }
         }
 
-        private String nextNonEmptyLine() throws IOException {
+        private String readLineString() throws IOException {
+            lineCache.reset();
+            if (EOF) return null;
+
+            while (true) {
+                if (bufferOffset >= bufferLength) {
+                    bufferLength = inputStream.read(readBuffer);
+                    if (bufferLength == -1) {
+                        EOF = true;
+                        break;
+                    }
+                    bufferOffset = 0;
+                }
+
+                int start = bufferOffset;
+                while (bufferOffset < bufferLength) {
+                    byte b = readBuffer[bufferOffset++];
+                    if (b == '\n') {
+                        int length = (bufferOffset - 1) - start;
+                        if (length > 0 && readBuffer[start + length - 1] == '\r') {
+                            length--;
+                        }
+                        lineCache.write(readBuffer, start, length);
+                        return lineCache.toString(StandardCharsets.US_ASCII);
+                    }
+                }
+                lineCache.write(readBuffer, start, bufferLength - start);
+            }
+
+            return lineCache.size() > 0 ? lineCache.toString(StandardCharsets.US_ASCII) : null;
+        }
+
+        private void advanceToNextHeader() throws IOException {
             String line;
-            while ((line = reader.readLine()) != null) {
+            while ((line = readLineString()) != null) {
+                line = line.trim();
                 if (!line.isEmpty()) {
-                    return line;
+                    if (line.startsWith("@")) {
+                        nextHeader = line;
+                        return;
+                    }
                 }
             }
-            return null;
+            nextHeader = null;
         }
 
         @Override
         public boolean hasNext() {
-            return currentHeader != null;
+            return nextHeader != null;
         }
 
         @Override
@@ -104,57 +142,46 @@ public class FastqReader implements Iterable<Fastq>, AutoCloseable {
                 throw new NoSuchElementException();
             }
 
-            if (!currentHeader.startsWith("@")) {
-                Logger.error(CLASS_NAME, "Invalid FASTQ header (expected '@'): " + currentHeader);
-                throw new IllegalStateException("Invalid FASTQ header: " + currentHeader);
-            }
-
-            // Parse @name description (matching FastaReader header splitting)
+            String currentHeader = nextHeader;
             String rawHeader = currentHeader.substring(1);
-            int spaceIdx = -1;
-            for (int i = 0; i < rawHeader.length(); i++) {
-                if (Character.isWhitespace(rawHeader.charAt(i))) {
-                    spaceIdx = i;
-                    break;
-                }
-            }
+            int spaceIdx = rawHeader.indexOf(' ');
             String name = (spaceIdx == -1) ? rawHeader : rawHeader.substring(0, spaceIdx);
             String description = (spaceIdx == -1) ? "" : rawHeader.substring(spaceIdx + 1).trim();
 
-            seqBuilder.setLength(0);
-            qualBuilder.setLength(0);
+            StringBuilder seqBuilder = new StringBuilder(150);
+            StringBuilder qualBuilder = new StringBuilder(150);
 
             try {
-                // 1. Read sequence line(s) until '+' separator (supports both standard 4-line and wrapped FASTQ)
+                // 1. Read sequence line(s) until '+' separator
                 String line;
-                while ((line = reader.readLine()) != null && !line.startsWith("+")) {
+                while ((line = readLineString()) != null) {
+                    if (line.startsWith("+")) {
+                        break;
+                    }
                     seqBuilder.append(line.trim());
                 }
 
                 if (line == null) {
-                    Logger.error(CLASS_NAME, "Unexpected EOF before '+' separator for record: " + name);
-                    throw new IllegalStateException("Truncated FASTQ record: " + name);
+                    throw new IllegalStateException("Unexpected EOF before '+' separator for record: " + name);
                 }
 
-                // 2. Read quality line(s) until quality length matches sequence length
-                //    (Critical: quality strings can start with '@', so we match length rather than checking startsWith("@"))
+                // 2. Read quality line(s) until length matches sequence length
                 int targetLen = seqBuilder.length();
-                while (qualBuilder.length() < targetLen && (line = reader.readLine()) != null) {
+                while (qualBuilder.length() < targetLen && (line = readLineString()) != null) {
                     qualBuilder.append(line.trim());
                 }
 
                 if (qualBuilder.length() != targetLen) {
-                    Logger.error(CLASS_NAME, "Sequence/quality length mismatch for record: " + name
-                            + " (seq=" + targetLen + ", qual=" + qualBuilder.length() + ")");
-                    throw new IllegalStateException("Corrupt FASTQ record (length mismatch): " + name);
+                    throw new IllegalStateException("Corrupt FASTQ record length mismatch: " + name);
                 }
 
-                // 3. Advance to next record header
-                currentHeader = nextNonEmptyLine();
+                // 3. Preload the next header for the subsequent hasNext() check
+                advanceToNextHeader();
 
             } catch (IOException e) {
-                Logger.error(CLASS_NAME, "Error reading FASTQ data: " + e.getMessage());
-                currentHeader = null;
+                Logger.error(CLASS_NAME, "Error parsing FASTQ record: " + e.getMessage());
+                nextHeader = null;
+                throw new RuntimeException(e);
             }
 
             return new Fastq(sequenceId++, name, seqBuilder.toString(), qualBuilder.toString(), description);
@@ -167,8 +194,8 @@ public class FastqReader implements Iterable<Fastq>, AutoCloseable {
 
         @Override
         public void close() throws IOException {
-            if (reader != null) {
-                reader.close();
+            if (inputStream != null) {
+                inputStream.close();
             }
         }
     }

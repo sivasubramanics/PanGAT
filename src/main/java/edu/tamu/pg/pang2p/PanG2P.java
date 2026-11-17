@@ -20,6 +20,7 @@ import java.util.Locale;
                 Anchors.class,
                 KmerCoverage.class,
                 Cohort.class,
+                ReadCounts.class
         })
 public class PanG2P {
     public static void main(String[] args) throws IOException {
@@ -43,7 +44,8 @@ public class PanG2P {
                                         "anchors",
                                         "anchors-test",
                                         "kmer-coverage",
-                                        "cohort"
+                                        "cohort",
+                                        "count-reads"
                                 )
         );
 
