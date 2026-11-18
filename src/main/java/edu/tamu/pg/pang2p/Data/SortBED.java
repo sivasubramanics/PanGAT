@@ -54,6 +54,9 @@ public class SortBED {
                     entries.add(new BEDEntry(line));
                 }
             }
+        } catch (Exception e) {
+            Logger.error(CLASS_NAME, "Error during BED sorting execution: " + e);
+            e.printStackTrace();
         }
 
         // Sorting
@@ -73,7 +76,8 @@ public class SortBED {
         }
 
         // Write results: temp file and replace original atomically
-        Path tmp = Files.createTempFile(bedFile.getParent(), "sortbed_", ".tmp");
+        Path dir = bedFile.toAbsolutePath().getParent();
+        Path tmp = Files.createTempFile(dir, "sortbed_", ".tmp");
         try (BufferedWriter bw = Files.newBufferedWriter(tmp)) {
             for (String h : header) {
                 bw.write(h); bw.newLine();

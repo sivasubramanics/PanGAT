@@ -37,9 +37,6 @@ public class Genotype implements Callable<Integer>, Runnable {
     @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing [2]", required = false, defaultValue = "2")
     private int threads = 2;
 
-//    @Option(names = {"--relax"}, description = "Skip remaining kmers in a read once a matching kmer is found", required = false)
-//    private boolean relax = false;
-
     @Option(names = {"--skip"}, description = "Process every `skip`-th k-mer for coverage calculation [1]", required = false, defaultValue = "1")
     private int skip = 1;
 
@@ -106,20 +103,10 @@ public class Genotype implements Callable<Integer>, Runnable {
 
             Logger.info(CLASS_NAME, "Calculating k-mer coverage for sample: " + sampleName);
 
-//            ReadCounts countReads = new ReadCounts(
-//                    referenceFile,
-//                    inputList,
-//                    outputCovFile,
-//                    kmerSize,
-//                    threads,
-//                    relax,
-//                    skip
-//            );
-
             KmerCoverage kmerCoverage = new KmerCoverage(
                     referenceFile,
                     sampleName,
-                    inputList.toArray(new Path[0]),
+                    inputList,
                     outputCovFile,
                     kmerSize,
                     threads,
@@ -130,7 +117,6 @@ public class Genotype implements Callable<Integer>, Runnable {
             );
 
             try {
-//                countReads.call();
                 kmerCoverage.call();
             } catch (Exception e) {
                 Logger.error(CLASS_NAME, "Failed to compute coverage for sample: " + sampleName + " - " + e.getMessage());
@@ -197,6 +183,12 @@ public class Genotype implements Callable<Integer>, Runnable {
         }
         if (kmerSize <= 0 || kmerSize % 2 == 0) {
             Logger.error(CLASS_NAME, "K-mer size must be a positive odd integer.");
+        }
+        if (minCount < 1) {
+            Logger.error(CLASS_NAME, "Minimum k-mer count must be at least 1.");
+        }
+        if (skip < 1) {
+            Logger.error(CLASS_NAME, "Skip value must be at least 1.");
         }
     }
 }

@@ -18,7 +18,7 @@ public class HapData implements Comparable<HapData> {
     private int length;
     private int totKmers;
     private int uniqueKmers;
-    private int uniqueSingleCopyKmers;
+    private int globalUniqueKmers;
 
     private double minRpb;
     private double maxRpb;
@@ -29,11 +29,11 @@ public class HapData implements Comparable<HapData> {
     private int[] genotype = new int[0];
     private double[] gtScaled = new double[0];
     private double[] normalizedCounts = new double[0];
-    private int[] countedKmers = new int[0];
-    private int[] numReads = new int[0];
+    private int[] obsCounts = new int[0];
+    private int[] obsTotalCounts = new int[0];
 
     public HapData(String clusterID, String hapID, String newGenomeID, String newChromID,
-                   String orgGenomeID, String orgChromID, int start, int end, int length) {
+                   String orgGenomeID, String orgChromID, int start, int end, int length, int totKmers, int uniqueKmers, int globalUniqueKmers) {
         this.clusterID = clusterID;
         this.hapID = hapID;
         this.newGenomeID = newGenomeID;
@@ -43,56 +43,39 @@ public class HapData implements Comparable<HapData> {
         this.start = start;
         this.end = end;
         this.length = length;
-        this.totKmers = -1;
-        this.uniqueKmers = -1;
-        this.uniqueSingleCopyKmers = -1;
+        this.totKmers = totKmers;
+        this.uniqueKmers = uniqueKmers;
+        this.globalUniqueKmers = globalUniqueKmers;
     }
 
     public void initCounts(int nSamples) {
-        this.countedKmers = new int[nSamples];
-        this.numReads = new int[nSamples];;
         this.genotype = new int[nSamples];
         Arrays.fill(this.genotype, -1);
         this.gtScaled = new double[nSamples];
         this.normalizedCounts = new double[nSamples];
+        this.obsCounts = new int[nSamples];
+        this.obsTotalCounts = new int[nSamples];
     }
 
-//    public synchronized void addSample(int obsCount, int obsTotalCount) {
-//        int currentLen = (this.obsCounts != null) ? this.obsCounts.length : 0;
-//        int newLen = currentLen + 1;
-//
-//        // Resize all sample-indexed arrays
-//        this.obsCounts = (this.obsCounts != null) ? Arrays.copyOf(this.obsCounts, newLen) : new int[1];
-//        this.obsTotalCounts = (this.obsTotalCounts != null) ? Arrays.copyOf(this.obsTotalCounts, newLen) : new int[1];
-//        this.genotype = (this.genotype != null) ? Arrays.copyOf(this.genotype, newLen) : new int[1];
-//        this.gtScaled = (this.gtScaled != null) ? Arrays.copyOf(this.gtScaled, newLen) : new double[1];
-//        this.normalizedCounts = (this.normalizedCounts != null) ? Arrays.copyOf(this.normalizedCounts, newLen) : new double[1];
-//
-//        // Assign observed counts and initialize genotype to -1
-//        this.obsCounts[currentLen] = obsCount;
-//        this.obsTotalCounts[currentLen] = obsTotalCount;
-//        this.genotype[currentLen] = -1;
-//        this.gtScaled[currentLen] = 0.0;
-//        this.normalizedCounts[currentLen] = 0.0;
-//    }
-
-    public synchronized void addSample(int countedKmers, int numReads) {
-        int currentLen = (this.numReads != null) ? this.numReads.length : 0;
+    public synchronized void addSample(int obsCount, int obsTotalCount) {
+        int currentLen = (this.obsCounts != null) ? this.obsCounts.length : 0;
         int newLen = currentLen + 1;
 
         // Resize all sample-indexed arrays
-        this.numReads = (this.numReads != null) ? Arrays.copyOf(this.numReads, newLen) : new int[1];
+        this.obsCounts = (this.obsCounts != null) ? Arrays.copyOf(this.obsCounts, newLen) : new int[1];
+        this.obsTotalCounts = (this.obsTotalCounts != null) ? Arrays.copyOf(this.obsTotalCounts, newLen) : new int[1];
         this.genotype = (this.genotype != null) ? Arrays.copyOf(this.genotype, newLen) : new int[1];
         this.gtScaled = (this.gtScaled != null) ? Arrays.copyOf(this.gtScaled, newLen) : new double[1];
         this.normalizedCounts = (this.normalizedCounts != null) ? Arrays.copyOf(this.normalizedCounts, newLen) : new double[1];
-        this.countedKmers = (this.countedKmers != null) ? Arrays.copyOf(this.countedKmers, newLen) : new int[1];
+        this.obsCounts = (this.obsCounts != null) ? Arrays.copyOf(this.obsCounts, newLen) : new int[1];
+        this.obsTotalCounts = (this.obsTotalCounts != null) ? Arrays.copyOf(this.obsTotalCounts, newLen) : new int[1];
 
         // Assign observed counts and initialize genotype to -1
-        this.countedKmers[currentLen] = countedKmers;
-        this.numReads[currentLen] = numReads;
         this.genotype[currentLen] = -1;
         this.gtScaled[currentLen] = 0.0;
         this.normalizedCounts[currentLen] = 0.0;
+        this.obsCounts[currentLen] = obsCount;
+        this.obsTotalCounts[currentLen] = obsTotalCount;
     }
 
     @Override
@@ -180,9 +163,9 @@ public class HapData implements Comparable<HapData> {
     public int getLength() { return length; }
     public int getTotKmers() { return totKmers; }
     public int getUniqueKmers() { return uniqueKmers; }
-    public int getUniqueSingleCopyKmers() { return uniqueSingleCopyKmers; }
-    public int[] getCountedKmers() { return countedKmers; }
-    public int[] getNumReads() { return numReads; }
+    public int getGlobalUniqueKmers() { return globalUniqueKmers; }
+    public int[] getObsCounts() { return obsCounts; }
+    public int[] getObsTotalCounts() { return obsTotalCounts; }
     public int[] getGenotype() { return genotype; }
     public double[] getGtScaled() { return gtScaled; }
     public double[] getNormalizedCounts() { return normalizedCounts; }
@@ -207,9 +190,9 @@ public class HapData implements Comparable<HapData> {
     public void setLength(int length) { this.length = length; }
     public void setTotKmers(int totKmers) { this.totKmers = totKmers; }
     public void setUniqueKmers(int uniqueKmers) { this.uniqueKmers = uniqueKmers; }
-    public void setUniqueSingleCopyKmers(int uniqueSingleCopyKmers) { this.uniqueSingleCopyKmers = uniqueSingleCopyKmers; }
-    public void setCountedKmers(int[] countedKmers) { this.countedKmers = (countedKmers != null) ? countedKmers : new int[0]; }
-    public void setNumReads(int[] numReads) { this.numReads = (numReads != null) ? numReads : new int[0]; }
+    public void setGlobalUniqueKmers(int globalUniqueKmers) { this.globalUniqueKmers = globalUniqueKmers; }
+    public void setObsCounts(int[] obsCounts) { this.obsCounts = (obsCounts != null) ? obsCounts : new int[0]; }
+    public void setObsTotalCounts(int[] obsTotalCounts) { this.obsTotalCounts = (obsTotalCounts != null) ? obsTotalCounts : new int[0]; }
     public void setGenotype(int[] genotype) { this.genotype = (genotype != null) ? genotype : new int[0]; }
     public void setGtScaled(double[] gtScaled) { this.gtScaled = (gtScaled != null) ? gtScaled : new double[0]; }
     public void setNormalizedCounts(double[] normalizedCounts) { this.normalizedCounts = (normalizedCounts != null) ? normalizedCounts : new double[0]; }
@@ -230,7 +213,7 @@ public class HapData implements Comparable<HapData> {
         sb.append(length).append("\t");
         sb.append(totKmers).append("\t");
         sb.append(uniqueKmers).append("\t");
-        sb.append(uniqueSingleCopyKmers).append("\t");
+        sb.append(globalUniqueKmers).append("\t");
         sb.append(roundTo2Decimals(minRpb)).append("\t");
         sb.append(roundTo2Decimals(maxRpb)).append("\t");
         sb.append(roundTo2Decimals(meanRPB)).append("\t");
@@ -244,8 +227,8 @@ public class HapData implements Comparable<HapData> {
             double gtVal = (i < gtScaled.length) ? this.gtScaled[i] : 0.0;
             sb.append(roundTo2Decimals(gtVal)).append(":");
             sb.append(roundTo2Decimals(this.normalizedCounts[i])).append(":");
-            sb.append((i < countedKmers.length) ? this.countedKmers[i] : 0).append(":");
-            sb.append((i < numReads.length) ? this.numReads[i] : 0);
+            sb.append((i < obsCounts.length) ? this.obsCounts[i] : 0).append(":");
+            sb.append((i < obsTotalCounts.length) ? this.obsTotalCounts[i] : 0);
 
             if (i < len - 1) {
                 sb.append("\t");

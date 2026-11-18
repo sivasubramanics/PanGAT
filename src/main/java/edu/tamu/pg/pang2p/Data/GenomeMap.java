@@ -30,6 +30,13 @@ public class GenomeMap {
         Logger.info(getClass().getSimpleName(), "Total genome entries: " + chromToInfo.size());
     }
 
+    public GenomeMap(Path genomeFile) throws IOException {
+        this.genomeFile = genomeFile;
+        loadFromFile();
+        Logger.info(getClass().getSimpleName(), "Loaded genome map from: " + genomeFile);
+        Logger.info(getClass().getSimpleName(), "Total genome entries: " + chromToInfo.size());
+    }
+
     private void loadFromFile() throws IOException {
         try (BufferedReader reader = Files.newBufferedReader(genomeFile)) {
             String line;

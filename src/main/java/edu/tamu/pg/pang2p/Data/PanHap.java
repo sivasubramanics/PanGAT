@@ -1,6 +1,8 @@
 package edu.tamu.pg.pang2p.Data;
 
 import edu.tamu.pg.pang2p.Utils.FileUtils;
+import edu.tamu.pg.pang2p.Utils.KMCConfig;
+import edu.tamu.pg.pang2p.Utils.KMCExecutor;
 import edu.tamu.pg.pang2p.Utils.Logger;
 
 import java.io.*;
@@ -17,7 +19,7 @@ public class PanHap {
     String[] samples = new String[0];
     double[] sampleSums = new double[0];
 
-    private String version = "1.0.0";
+    private String version = "0.0.1";
     private final List<String> commandLines = new ArrayList<>();
     private final Map<String, String> parameters = new LinkedHashMap<>();
 
@@ -42,13 +44,17 @@ public class PanHap {
                 int length = Integer.parseInt(parts[6]);
                 int start = Integer.parseInt(parts[7]);
                 int end = Integer.parseInt(parts[8]);
-                hapData.computeIfAbsent(hapID, k -> new HapData(clusterId, hapID, newGenomeID, newChromID, orgGenomeID, orgChromID, start, end, length));
+                int totalKmers = Integer.parseInt(parts[9]);
+                int uniqueKmers = Integer.parseInt(parts[10]);
+                int globalUniqueKmers = Integer.parseInt(parts[11]);
+                hapData.computeIfAbsent(hapID, k -> new HapData(clusterId, hapID, newGenomeID, newChromID, orgGenomeID, orgChromID, start, end, length, totalKmers, uniqueKmers, globalUniqueKmers));
             }
             Logger.info(CLASS_NAME, "Loaded " + hapData.size() + " hap data");
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
+
 
     public PanHap(Path panClustersRepFile, Path mapKmersFile) {
         this(panClustersRepFile);
@@ -66,8 +72,8 @@ public class PanHap {
 
                 if (line.startsWith("hapID") || line.startsWith("# hapID")) {
                     String[] parts = line.replace("# ", "").split("\t");
-                    if (parts.length > 13) {
-                        samples = Arrays.copyOfRange(parts, 13, parts.length);
+                    if (parts.length > 15) {
+                        samples = Arrays.copyOfRange(parts, 15, parts.length);
                         sampleSums = new double[samples.length];
                     }
                     continue;
@@ -76,18 +82,19 @@ public class PanHap {
                 String[] parts = line.split("\t");
                 String hapID = parts[0];
                 int totalKmers = Integer.parseInt(parts[7]);
+                int uniqueKmers = Integer.parseInt(parts[8]);
+                int globalUniqueKmers = Integer.parseInt(parts[9]);
 
-                int sampleCount = parts.length - 13;
+                int sampleCount = parts.length - 15;
                 int[] genotype = new int[sampleCount];
                 double[] gtScaled = new double[sampleCount];
                 double[] normalizedCounts = new double[sampleCount];
                 int[] obsCounts = new int[sampleCount];
                 int[] obsTotalCounts = new int[sampleCount];
-                int[] countedKmers = new int[sampleCount];
-                int[] numReads = new int[sampleCount];
+
 
                 for (int i = 0; i < sampleCount; i++) {
-                    String[] attrs = parts[i + 13].split(":");
+                    String[] attrs = parts[i + 15].split(":");
 
                     genotype[i] = Integer.parseInt(attrs[0]);
                     gtScaled[i] = Double.parseDouble(attrs[1]);
@@ -101,11 +108,13 @@ public class PanHap {
                 HapData hap = hapData.get(hapID);
                 if (hap != null) {
                     hap.setTotKmers(totalKmers);
+                    hap.setUniqueKmers(uniqueKmers);
+                    hap.setGlobalUniqueKmers(globalUniqueKmers);
                     hap.setGenotype(genotype);
                     hap.setGtScaled(gtScaled);
                     hap.setNormalizedCounts(normalizedCounts);
-                    hap.setCountedKmers(countedKmers);
-                    hap.setNumReads(numReads);
+                    hap.setObsCounts(obsCounts);
+                    hap.setObsTotalCounts(obsTotalCounts);
                 }
             }
             Logger.info(CLASS_NAME, "Loaded " + hapData.size() + " hap data");
@@ -192,7 +201,7 @@ public class PanHap {
                 int length = Integer.parseInt(parts[1]);
                 int totalKmers = Integer.parseInt(parts[2]);
                 int uniqueKmers = Integer.parseInt(parts[3]);
-                int uniqueSingleCopyKmers = Integer.parseInt(parts[4]);
+                int globalUniqueKmers = Integer.parseInt(parts[4]);
                 int countedKmers = Integer.parseInt(parts[5]);
                 int numReads = Integer.parseInt(parts[6]);
 
@@ -202,7 +211,7 @@ public class PanHap {
                     if (hap.getTotKmers() == -1) {
                         hap.setTotKmers(totalKmers);
                         hap.setUniqueKmers(uniqueKmers);
-                        hap.setUniqueSingleCopyKmers(uniqueSingleCopyKmers);
+                        hap.setGlobalUniqueKmers(globalUniqueKmers);
                     } else if (hap.getTotKmers() != totalKmers) {
                         Logger.error(CLASS_NAME, "HapID " + hapID + " total kmers mismatch. Expected: " + hap.getTotKmers() + ", Found: " + totalKmers);
                     }
@@ -223,11 +232,11 @@ public class PanHap {
     public void normalizePanHap() {
         Logger.info(CLASS_NAME, "Normalizing pan-hap data for " + samples.length + " samples.");
         for (HapData hap : hapData.values()) {
-            int[] numReads = hap.getNumReads();
+            int[] obsCounts = hap.getObsCounts();
             double[] normalizedCounts = new double[samples.length];
-            if (numReads != null) {
-                for (int i = 0; i < numReads.length; i++) {
-                    double normalizedCount = (sampleSums[i] > 0) ? (numReads[i] / sampleSums[i]) * 1_000_000_000.0 : 0.0;
+            if (obsCounts != null) {
+                for (int i = 0; i < obsCounts.length; i++) {
+                    double normalizedCount = (sampleSums[i] > 0) ? (obsCounts[i] / sampleSums[i]) * 1_000_000_000.0 : 0.0;
                     normalizedCounts[i] = normalizedCount;
                 }
             }
@@ -270,11 +279,11 @@ public class PanHap {
                 writer.write("##parameter=<ID=" + entry.getKey() + ",Value=" + entry.getValue() + ">");
                 writer.newLine();
             }
-            writer.write("##FORMAT=<ID=GT:GTScaled:NORM:COUNTEDKMER:NUMREADS,Number=5,Description=\"Genotype:GenotypeScaled:NormalizedCount:CountedKmers:NumReads\">");
+            writer.write("##FORMAT=<ID=GT:GTScaled:NORM:OBS:TOTAL,Number=5,Description=\"Genotype:GenotypeScaled:NormalizedCount:MappedKmers:MappedTotalKmers\">");
             writer.newLine();
 
             // Column Headers
-            writer.write("# hapID\tGenomeID\tChromID\tSimChromID\tStart\tEnd\tLength\tTotKmers\tUniqueKmers\tUniqueSingleCopyKmers\tMinRPB\tMaxRPB\tMeanRPB\tSdRPB\tCV");
+            writer.write("# hapID\tGenomeID\tChromID\tSimChromID\tStart\tEnd\tLength\tTotKmers\tUniqueKmers\tGlobalUniqueKmers\tMinRPB\tMaxRPB\tMeanRPB\tSdRPB\tCV");
             for (String sample : samples) {
                 writer.write("\t" + sample);
             }

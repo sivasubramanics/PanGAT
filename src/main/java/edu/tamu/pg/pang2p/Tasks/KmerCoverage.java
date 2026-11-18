@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -23,8 +24,8 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     @Option(names = {"-s", "--sample"}, description = "Name of the sample", required = true)
     private String sampleName;
 
-    @Option(names = {"-i", "--input"}, description = "Path to the input files (space separated). format is assumed from the file extension.", required = true)
-    private Path[] inputFiles;
+    @Option(names = {"-i", "--input"}, description = "Input reads file path(s)", required = true, split = ",", arity = "1..*")
+    private List<Path> inputFiles;
 
     @Option(names = {"-o", "--output"}, description = "Path to the output file", required = true)
     private Path outputFile;
@@ -56,12 +57,12 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     }
 
     // Parameterized constructor for programmatically calling this task
-    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, int skip, boolean memory){
+    public KmerCoverage(Path referenceFasta, String sampleName, List<Path> inputFiles, Path outputFile, int kmerSize, int threads, int minCount, int skip, boolean memory){
         this(referenceFasta, sampleName, inputFiles, outputFile, kmerSize, threads, minCount, skip, memory, false);
     }
 
     // Parameterized constructor for programmatically calling this task
-    public KmerCoverage(Path referenceFasta, String sampleName, Path[] inputFiles, Path outputFile, int kmerSize, int threads, int minCount, int skip, boolean memory, boolean keepKmc) {
+    public KmerCoverage(Path referenceFasta, String sampleName, List<Path> inputFiles, Path outputFile, int kmerSize, int threads, int minCount, int skip, boolean memory, boolean keepKmc) {
         this.referenceFasta = referenceFasta;
         this.sampleName = sampleName;
         this.inputFiles = inputFiles;
@@ -138,6 +139,7 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         try (BufferedWriter writer = Files.newBufferedWriter(outputFile);
              FastaReader fastaReader = new FastaReader(referenceFasta)) {
 
+            writer.write("#HapID\tLength\tTotalKmers\tUniqueKmers\tObservedKmers\tObservedTotalKmers\n");
             for (Fasta scr : fastaReader) {
                 completionService.submit(() -> {
                     processFastaRecord(scr, kmc, writer, writeCounter);

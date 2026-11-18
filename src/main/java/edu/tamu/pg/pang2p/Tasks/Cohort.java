@@ -1,6 +1,7 @@
 package edu.tamu.pg.pang2p.Tasks;
 
 import edu.tamu.pg.pang2p.Data.PanHap;
+import edu.tamu.pg.pang2p.Utils.FileUtils;
 import edu.tamu.pg.pang2p.Utils.HelperFunctions;
 import edu.tamu.pg.pang2p.Utils.Logger;
 import picocli.CommandLine;
@@ -15,8 +16,8 @@ import java.util.concurrent.Callable;
 @Command(name = "cohort", description = "Compile raw mapped k-mer counts across sample coverage files into cohort.pan_matrix.tsv.gz", sortOptions = false)
 public class Cohort implements Runnable, Callable<Integer> {
 
-    @Option(names = {"-p", "--panclusters"}, description = "Path to pan_clusters_rep.tsv file.", required = true)
-    private Path panclustersFile;
+    @Option(names = {"-p", "--panrep"}, description = "Path to pan_clusters_rep.tsv file.", required = true)
+    private Path panclustersRep;
 
     @Option(names = {"-i", "--input"}, description = "Path to input sample coverage files.", required = true, arity = "1..*", split = "\\s+")
     private Path[] input;
@@ -39,8 +40,8 @@ public class Cohort implements Runnable, Callable<Integer> {
     public Cohort() {
     }
 
-    public Cohort(Path panclustersFile, Path[] input, String[] samples, String outPrefix, boolean force) {
-        this.panclustersFile = panclustersFile;
+    public Cohort(Path panclustersRep, Path[] input, String[] samples, String outPrefix, boolean force) {
+        this.panclustersRep = panclustersRep;
         this.input = input;
         this.samples = samples;
         this.outPrefix = outPrefix;
@@ -49,8 +50,9 @@ public class Cohort implements Runnable, Callable<Integer> {
 
     @Override
     public Integer call() throws Exception {
-        if (!Files.exists(panclustersFile)) {
-            Logger.error(CLASS_NAME, "Pan clusters file does not exist.");
+
+        if (!FileUtils.isFile(panclustersRep)) {
+            Logger.error(CLASS_NAME, "Pan clusters rep file does not exist.");
             return 1;
         }
 
@@ -60,12 +62,12 @@ public class Cohort implements Runnable, Callable<Integer> {
         }
 
         Path panMatrixFile = Path.of(outPrefix + ".pan_matrix.tsv.gz");
-        if (Files.exists(panMatrixFile) && !force) {
+        if (FileUtils.isFile(panMatrixFile) && !force) {
             Logger.info(CLASS_NAME, "Pan matrix file already exists. Samples will be added to the existing file. Use --force to overwrite.");
-            panHap = new PanHap(panclustersFile, panMatrixFile);
+            panHap = new PanHap(panclustersRep, panMatrixFile);
         } else {
             Logger.info(CLASS_NAME, "Creating new pan matrix file.");
-            panHap = new PanHap(panclustersFile);
+            panHap = new PanHap(panclustersRep);
         }
 
         panHap.addCommandLine(HelperFunctions.getCommandLine());

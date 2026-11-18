@@ -46,6 +46,9 @@ public class BuildReference implements Callable<Integer>, Runnable {
     @Option(names = {"--min_length"}, description = "Minimum length for single copy regions to be considered", required = false, defaultValue = "200")
     private int minLength;
 
+    @Option(names = {"p", "--pan_k"}, description = "K-mer size for pan clusters [default: 51]", required = false, defaultValue = "51")
+    private int panK;
+
     @Option(names = {"--force"}, description = "Force overwrite of existing files", required = false)
     private boolean isForce;
 
@@ -80,8 +83,13 @@ public class BuildReference implements Callable<Integer>, Runnable {
         RunMMseqs runMMseqs = new RunMMseqs(dirs, mmseqsConfig);
         runMMseqs.run(genomeMap);
 
-        PanCluster panCluster = new PanCluster(dirs, threads, isForce);
-        panCluster.run(genomeMap);
+//        public PanCluster(Path scrFile, Path clustersFile, Path genomeMapFile, Path outPrefix, int nThreads, boolean isForce) {
+        Path scrFile  = dirs.getSingleCopyRawFile();
+        Path clustersFile = dirs.getDirectory(PipelineSteps.ANCHORS).resolve("clusters.tsv");
+        Path genomeMapFile = dirs.getBaseDir().resolve("genomesMap.csv");
+        Path outPrefix = dirs.getDirectory(PipelineSteps.ANCHORS).resolve("pan_clusters");
+        PanCluster panCluster = new PanCluster(scrFile, clustersFile, genomeMapFile, outPrefix, panK, threads, isForce);
+        panCluster.run();
 
         return 0;
     }

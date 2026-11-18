@@ -6,56 +6,87 @@ import org.jgrapht.Graph;
 import org.jgrapht.graph.DefaultEdge;
 import org.jgrapht.graph.SimpleGraph;
 import org.jgrapht.alg.connectivity.ConnectivityInspector;
+import picocli.CommandLine.*;
 
 import java.nio.file.*;
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
-public class PanCluster {
-    private final Path clustersFile;
-    private final Path singleCopyDir;
-    private final Path scrFile;
+
+@Command(name = "pan-clusters", description = "Parse mmseqs2 clustering output to generate members and representative files.")
+public class PanCluster implements Runnable, Callable<Integer> {
+    @Option(names = {"-s", "--single-copy-fasta"}, description = "Path to the all_single_copy_regions.fasta file", required = true)
+    private Path scrFile;
+
+    @Option(names = {"-c", "--clusters"}, description = "Path to the mmseqs2 clusters.tsv file", required = true)
+    private Path clustersFile;
+
+    @Option(names = {"-g", "--genome-map"}, description = "Path to the genome map file", required = true)
+    private Path genomeMapFile;
+
+    @Option(names = {"-o", "--outprefix"}, description = "Output prefix for the generated files", required = true)
+    private Path outPrefix;
+
+    @Option(names = {"-k", "--kmer"}, description = "K-mer size for Pan Cluster KMC", required = false, defaultValue = "51")
+    private int kmerSize;
+
+    @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing", required = false, defaultValue = "2")
     private int nThreads;
-    private final boolean isForce;
+
+    @Option(names = {"--memory"}, description = "Use memory mode for processing", required = false, defaultValue = "false")
+    private boolean memory = false;
+
+    @Option(names = {"--force"}, description = "Force re-execution of the step", required = false, defaultValue = "false")
+    private boolean isForce = false;
+
     private final String CLASS_NAME = PanCluster.class.getSimpleName();
+    private final AtomicInteger lastLoggedPercent = new AtomicInteger(-1);
 
-    // Accept DirectoryStructure and retrieve file paths internally
-    public PanCluster(DirectoryStructure dirs) {
-        this(dirs, 2, false);
-    }
+    public PanCluster() {}
 
-    public PanCluster(DirectoryStructure dirs, int nThreads) {
-        this(dirs, nThreads, false);
-    }
-
-    public PanCluster(DirectoryStructure dirs, boolean isForce) {
-        this(dirs, 2, isForce);
-    }
-
-    public PanCluster(DirectoryStructure dirs, int nThreads, boolean isForce) {
-        this.singleCopyDir = dirs.getDirectory(PipelineSteps.ANCHORS);
-        this.clustersFile = singleCopyDir.resolve("clusters.tsv");
-        this.scrFile = dirs.getSingleCopyRawFile();
+    public PanCluster(Path scrFile, Path clustersFile, Path genomeMapFile, Path outPrefix, int kmerSize, int nThreads, boolean isForce) {
+        this.scrFile = scrFile;
+        this.clustersFile = clustersFile;
+        this.genomeMapFile = genomeMapFile;
+        this.outPrefix = outPrefix;
+        this.kmerSize = kmerSize;
         this.nThreads = nThreads;
         this.isForce = isForce;
     }
 
-    public void run(GenomeMap genomeMap) throws IOException {
-        Path panClustersFasta = singleCopyDir.resolve("pan_clusters.fasta");
-        Path repOut = singleCopyDir.resolve("pan_clusters_rep.tsv");
-        Path membOut = singleCopyDir.resolve("pan_clusters_members.tsv");
-        Path bedOut = singleCopyDir.resolve("pan_clusters.bed");
+    public void run() {
+        try {
+            call();
+        } catch (Exception e) {
+            Logger.error(CLASS_NAME, "Error during PanCluster execution: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 
-        // Skip execution if outputs exist and isForce is false
+    @Override
+    public Integer call() throws Exception {
+        GenomeMap genomeMap = new GenomeMap(genomeMapFile);
+        if (FileUtils.isDir(outPrefix)) {
+            outPrefix = outPrefix.resolve("pan_clusters");
+        }
+        Path panClustersFasta = Path.of(outPrefix + ".fasta");
+        Path repOut = Path.of(outPrefix + "_rep.tsv");
+        Path membOut = Path.of(outPrefix + "_members.tsv");
+        Path bedOut = Path.of(outPrefix + ".bed");
+        Path kmcDB = Path.of(outPrefix + ".k" + kmerSize);
+
         if (!isForce && Files.exists(panClustersFasta) && Files.exists(repOut)
                 && Files.exists(membOut) && Files.exists(bedOut)) {
             Logger.info(CLASS_NAME, "Skipping PanCluster step: output files already exist. Use --force to re-run.");
-            return;
+            return 0;
         }
 
         Logger.info(CLASS_NAME, "Running PanCluster step.");
 
+        // 1. Build Graph from clustering output
         Graph<String, DefaultEdge> graph = new SimpleGraph<>(DefaultEdge.class);
         try (BufferedReader br = new BufferedReader(new FileReader(clustersFile.toFile()))) {
             String line;
@@ -69,6 +100,7 @@ public class PanCluster {
             }
         }
 
+        // 2. Parse sequence metadata
         Map<String, SeqMeta> seqMetaMap = new HashMap<>();
         FastaIndex fastaIndex = new FastaIndex(scrFile);
 
@@ -84,10 +116,8 @@ public class PanCluster {
             int start = -1, end = -1;
             if (desc != null && desc.contains(":") && desc.contains("-")) {
                 try {
-                    // Split "chrom:start-end" into ["chrom", "start-end"]
                     String[] chromAndRange = desc.trim().split(":");
                     if (chromAndRange.length == 2) {
-                        // Split "start-end" into ["start", "end"]
                         String[] coordinates = chromAndRange[1].split("-");
                         if (coordinates.length == 2) {
                             start = Integer.parseInt(coordinates[0]);
@@ -100,77 +130,178 @@ public class PanCluster {
             }
             seqMeta.setStart(start);
             seqMeta.setEnd(end);
-
             seqMetaMap.put(seqName, seqMeta);
         }
 
+        // 3. Identify connected components and determine representative IDs
         ConnectivityInspector<String, DefaultEdge> inspector = new ConnectivityInspector<>(graph);
         List<Set<String>> graphClusters = inspector.connectedSets();
 
-        List<Cluster> clusters = new ArrayList<>();
-        int idx = 0;
+        List<String> repIds = new ArrayList<>();
+        List<List<SeqMeta>> validClusterMembersList = new ArrayList<>();
+
         for (Set<String> clusterSeqIds : graphClusters) {
             List<SeqMeta> memberSeqs = clusterSeqIds.stream()
                     .map(seqMetaMap::get)
+                    .filter(Objects::nonNull) // Prevent NullPointerException if ID is missing from fasta
                     .collect(Collectors.toList());
-            clusters.add(new Cluster("clstr" + idx, memberSeqs));
+
+            if (memberSeqs.isEmpty()) {
+                continue;
+            }
+
+            memberSeqs.sort(Comparator.comparingInt(SeqMeta::getLength).reversed());
+            repIds.add(memberSeqs.get(0).getId());
+            validClusterMembersList.add(memberSeqs);
+        }
+
+        // 4. Write representative sequences to FASTA
+        Set<String> repIdSet = new HashSet<>(repIds);
+
+        try (FastaWriter fastaWriter = new FastaWriter(panClustersFasta);
+             FastaReader fastaReader = new FastaReader(scrFile)) {
+            for (Fasta in : fastaReader) {
+                if (repIdSet.contains(in.getName())) {
+                    fastaWriter.write(in);
+                }
+            }
+        }
+
+        // 5. Run KMC on representative FASTA
+        KMCConfig kmcConfig = KMCConfig.builder()
+                .inputPaths(panClustersFasta)
+                .outputPrefix(kmcDB)
+                .kmerSize(kmerSize)
+                .threads(nThreads)
+                .minCount(1)
+                .build();
+        KMCExecutor.run(kmcConfig);
+
+        long totalKmersSum = 0;
+        Map<String, Long> seqTotalKmersMap = new ConcurrentHashMap<>();
+        Map<String, Long> seqUniqueKmersMap = new ConcurrentHashMap<>();
+        Map<String, Long> seqGlobalUniqueKmersMap = new ConcurrentHashMap<>();
+
+        // 6. Multithreaded processing with progress tracking
+        ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+        ExecutorCompletionService<Void> completionService = new ExecutorCompletionService<>(executor);
+
+        List<Fasta> fastasToProcess = new ArrayList<>();
+        try (FastaReader reader = new FastaReader(panClustersFasta)) {
+            for (Fasta fasta : reader) {
+                fastasToProcess.add(fasta);
+            }
+        }
+
+        int totalSequences = fastasToProcess.size();
+        AtomicInteger completedSequences = new AtomicInteger(0);
+        lastLoggedPercent.set(-1);
+
+        try (KMC kmc = new KMC(kmcDB, memory)) {
+            int prefixLength = kmc.getPrefixLength();
+
+            for (Fasta fasta : fastasToProcess) {
+                completionService.submit(() -> {
+                    KmerIterator it = fasta.kmers(kmerSize, prefixLength, true);
+
+                    Set<Kmer> sequenceUniqueKmers = new HashSet<>();
+                    long sequenceTotalKmers = 0;
+                    long sequenceGlobalUniqueKmers = 0;
+
+                    while (it.hasNext()) {
+                        Kmer kmer = it.next().getKmer();
+                        sequenceTotalKmers++;
+                        sequenceUniqueKmers.add(kmer);
+
+                        if (kmc.getCount(kmer) == 1) {
+                            sequenceGlobalUniqueKmers++;
+                        }
+                    }
+
+                    seqTotalKmersMap.put(fasta.getName(), sequenceTotalKmers);
+                    seqUniqueKmersMap.put(fasta.getName(), (long) sequenceUniqueKmers.size());
+                    seqGlobalUniqueKmersMap.put(fasta.getName(), sequenceGlobalUniqueKmers);
+
+                    // Track progress updates
+                    int completed = completedSequences.incrementAndGet();
+                    int percent = (int) ((completed * 100L) / totalSequences);
+
+                    if (percent % 5 == 0) {
+                        synchronized (lastLoggedPercent) {
+                            if (percent > lastLoggedPercent.get()) {
+                                lastLoggedPercent.set(percent);
+                                int dotsCount = percent / 5;
+                                String dots = ".".repeat(dotsCount);
+                                String progressMsg = String.format("Processing K-mers %s%d%%", dots, percent);
+                                Logger.progress(CLASS_NAME, progressMsg);
+                            }
+                        }
+                    }
+                    return null;
+                });
+            }
+
+
+            for (int i = 0; i < totalSequences; i++) {
+                try {
+                    completionService.take().get();
+                } catch (Exception e) {
+                    Logger.error(CLASS_NAME, "Error during parallel K-mer processing task: " + e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Error during parallel K-mer processing", e);
+        } finally {
+            executor.shutdownNow();
+        }
+
+        for (long count : seqTotalKmersMap.values()) {
+            totalKmersSum += count;
+        }
+
+        Logger.info(CLASS_NAME, "Summary -> Total K-mers processed: " + totalKmersSum);
+
+        // 7. Instantiate final Cluster objects using collected k-mer maps
+        List<Cluster> clusters = new ArrayList<>();
+        int idx = 0;
+        for (List<SeqMeta> memberSeqs : validClusterMembersList) {
+            String repId = memberSeqs.get(0).getId();
+
+            long repTotalKmers = seqTotalKmersMap.getOrDefault(repId, 0L);
+            long repUniqueKmers = seqUniqueKmersMap.getOrDefault(repId, 0L);
+            long repGlobalUniqueKmers = seqGlobalUniqueKmersMap.getOrDefault(repId, 0L);
+
+            clusters.add(new Cluster("clstr" + idx, memberSeqs, repTotalKmers, repUniqueKmers, repGlobalUniqueKmers));
             idx++;
         }
 
+        // 8. Write outputs (rep.tsv, members.tsv, bed)
         try (
                 BufferedWriter repBw = Files.newBufferedWriter(repOut);
                 BufferedWriter membBw = Files.newBufferedWriter(membOut);
                 BufferedWriter bedBw = Files.newBufferedWriter(bedOut)
         ) {
-            // 1. Rep header
             repBw.write(String.join(Defaults.FIELD_SEPERATOR,
-                    "clusterId",
-                    "repId",
-                    "genome",
-                    "chrom",
-                    "orgGenome",
-                    "orgChrom",
-                    "length",
-                    "start",
-                    "end",
-                    "size",
-                    "ngenotypes",
-                    "minLength",
-                    "maxLength",
-                    "meanLength",
-                    "sdLength",
-                    "cvLength",
-                    "mainChrom",
-                    "mainChromFrac",
-                    "nChroms"));
+                    "clusterId", "repId", "genome", "chrom", "orgGenome", "orgChrom",
+                    "length", "start", "end", "totalKmers", "uniqueKmers", "globalUniqueKmers", "size", "ngenotypes", "minLength",
+                    "maxLength", "meanLength", "sdLength", "cvLength", "mainChrom",
+                    "mainChromFraction", "nChroms"));
             repBw.newLine();
 
-            // 2. Members header
             membBw.write(String.join(Defaults.FIELD_SEPERATOR,
-                    "clusterId",
-                    "seqId",
-                    "genome",
-                    "chrom",
-                    "orgGenome",
-                    "orgChrom",
-                    "length",
-                    "start",
-                    "end"));
+                    "clusterId", "seqId", "genome", "chrom", "orgGenome", "orgChrom",
+                    "length", "start", "end"));
             membBw.newLine();
 
-            // 3. Loop clusters
             for (Cluster c : clusters) {
-                // Write rep
                 repBw.write(c.repSummaryTSV());
                 repBw.newLine();
 
-                // Write members
                 for (String line : c.membersSummaryTSV()) {
                     membBw.write(line);
                     membBw.newLine();
                 }
 
-                // Write BED for rep
                 bedBw.write(c.repBEDLine());
                 bedBw.newLine();
             }
@@ -179,50 +310,10 @@ public class PanCluster {
         SortBED sorter = new SortBED(bedOut);
         sorter.sort(nThreads);
 
-        // Read BED sequence IDs (preserve order, and set for quick lookup)
-        List<String> panScrIDs = new ArrayList<>();
-        Set<String> panScrSet = new HashSet<>();
-        try (BufferedReader br = new BufferedReader(new FileReader(bedOut.toFile()))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                String[] fields = line.split("\t");
-                if (fields.length < 4) continue;
-                String seqId = fields[3];
-                panScrIDs.add(seqId);
-                panScrSet.add(seqId);
-            }
-        }
-
-        Map<String, Fasta> fastaMap = new HashMap<>();
-        try (FastaReader scrReader = new FastaReader(scrFile)) {
-            for (Fasta scr : scrReader) {
-                if (panScrSet.contains(scr.getName())) {
-                    fastaMap.put(scr.getName(), scr);
-                }
-            }
-        }
-
-        try (FastaWriter fastaWriter = new FastaWriter(panClustersFasta.toString())) {
-            for (String seqId : panScrIDs) {
-                Fasta scr = fastaMap.get(seqId);
-                if (scr != null) {
-                    fastaWriter.write(scr);
-                } else {
-                    Logger.error(CLASS_NAME, "Sequence not found in fasta file: " + seqId);
-                }
-            }
-        }
-
-        // Clean up log files and temporary FASTA indices (retaining clusters.tsv)
-        FileUtils.rmFile(singleCopyDir.resolve("mmseqs_clustering.log"));
-        FileUtils.rmFile(singleCopyDir.resolve("mmseqs_createDB.log"));
-        FileUtils.rmFile(singleCopyDir.resolve("all_single_copy_regions.fasta"));
-        FileUtils.rmFile(singleCopyDir.resolve("all_single_copy_regions.fasta.faidx"));
+        Logger.info(CLASS_NAME, "PanCluster step completed successfully.");
+        return 0;
     }
 
-    /**
-     * Contains sequence metadata, parsed from sequence ID and a GenomeMap.
-     */
     public static class SeqMeta implements Comparable<SeqMeta> {
         private final String id;
         private final String chrom;
@@ -234,10 +325,6 @@ public class PanCluster {
         private int end = -1;
         private boolean isForward = true;
 
-        /**
-         * Constructs SeqMeta from sequence ID and genomeMap.
-         * ID should have at least 2*CHROM_CODE_LENGTH characters.
-         */
         public SeqMeta(String id, GenomeMap genomeMap) {
             if (id == null) throw new IllegalArgumentException("ID cannot be null");
             int chromLen = Defaults.CHROM_CODE_LENGTH;
@@ -258,7 +345,6 @@ public class PanCluster {
             }
         }
 
-        // --- Getters ---
         public String getId()        { return id; }
         public String getChrom()     { return chrom; }
         public String getChromCode() { return chrom.substring(Defaults.CHROM_CODE_LENGTH); }
@@ -270,44 +356,21 @@ public class PanCluster {
         public int getEnd()          { return end; }
         public boolean isForward()   { return isForward; }
 
-        // --- Setters ---
         public void setLength(int length)   { this.length = length; }
         public void setStart(int start)     { this.start = start; }
         public void setEnd(int end)         { this.end = end; }
         public void setDirection(boolean isForward) { this.isForward = isForward; }
 
-        public String toTSV(boolean isStrand) {
-            if (isStrand) {
-                return String.format("%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\t%s",
-                        id, genome, chrom, orgGenome, orgChrom, length, start, end, isForward
-                );
-            } else {
-                return String.format("%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d",
-                        id, genome, chrom, orgGenome, orgChrom, length, start, end
-                );
-            }
-        }
-
-        @Override
-        public String toString() {
-            return String.format(
-                    "SeqMeta{id='%s', genome='%s', chrom='%s', orgGenome='%s', orgChrom='%s', length=%d, start=%d, end=%d, forward=%s}",
-                    id, genome, chrom, orgGenome, orgChrom, length, start, end, isForward
-            );
-        }
-
         @Override
         public int compareTo(SeqMeta o) {
-            // sort based on length
             return Integer.compare(this.length, o.length);
         }
     }
 
     public class Cluster {
-        // Fields
         private final String clusterId;
-        private final List<SeqMeta> members;  // All member sequences (sorted by length descending)
-        private final SeqMeta rep;            // Longest sequence
+        private final List<SeqMeta> members;
+        private final SeqMeta rep;
         private final int size;
         private final int ngenotypes;
         private final int minLength;
@@ -315,36 +378,37 @@ public class PanCluster {
         private final double meanLength;
         private final double sdLength;
         private final double cvLength;
-        private final String mainChrom;       // Most common chromosome (excluding "chrUn")
+        private final String mainChrom;
         private final double mainChromFraction;
-        private final int nChroms;            // Number of unique chromosomes (excluding "chrUn")
-        private final Map<String, List<SeqMeta>> membersByGenotype;  // genotype -> list of SeqMeta
+        private final int nChroms;
+        private final Map<String, List<SeqMeta>> membersByGenotype;
+        private final long totalKmers;
+        private final long uniqueKmers;
+        private final long globalUniqueKmers;
 
-        // Constructor
-        public Cluster(String clusterId, List<SeqMeta> members) {
+        public Cluster(String clusterId, List<SeqMeta> members, long totalKmers, long uniqueKmers, long globalUniqueKmers) {
             this.clusterId = clusterId;
             if (members == null || members.isEmpty())
                 throw new IllegalArgumentException("Cluster must have at least one member");
-            // Defensive copy and sort by descending length
             this.members = new ArrayList<>(members);
             this.members.sort(Comparator.comparingInt(SeqMeta::getLength).reversed());
             this.rep = this.members.get(0);
             this.size = this.members.size();
+            this.totalKmers = totalKmers;
+            this.uniqueKmers = uniqueKmers;
+            this.globalUniqueKmers = globalUniqueKmers;
 
-            // Unique genotypes
             Set<String> genotypes = this.members.stream()
                     .map(SeqMeta::getGenome)
                     .collect(Collectors.toSet());
             this.ngenotypes = genotypes.size();
 
-            // Length statistics
             List<Integer> lengths = this.members.stream()
                     .map(SeqMeta::getLength)
                     .collect(Collectors.toList());
             this.minLength = Collections.min(lengths);
             this.maxLength = Collections.max(lengths);
             this.meanLength = lengths.stream().mapToInt(i -> i).average().orElse(0);
-            // Calculate standard deviation
             double mean = this.meanLength;
             this.sdLength = Math.sqrt(
                     lengths.stream()
@@ -353,7 +417,6 @@ public class PanCluster {
             );
             this.cvLength = mean == 0 ? 0 : this.sdLength / mean;
 
-            // Chromosome stats (ignore "chrUn")
             Map<String, Integer> chromCounts = new HashMap<>();
             int chromValidTotal = 0;
             for (SeqMeta seq : this.members) {
@@ -375,7 +438,6 @@ public class PanCluster {
             this.nChroms = chromCounts.size();
             this.mainChromFraction = chromValidTotal == 0 ? 0 : ((double) maxCount) / chromValidTotal;
 
-            // Per-genotype lists
             Map<String, List<SeqMeta>> byGeno = new HashMap<>();
             for (SeqMeta seq : this.members) {
                 String geno = seq.getGenome();
@@ -383,22 +445,6 @@ public class PanCluster {
             }
             this.membersByGenotype = Collections.unmodifiableMap(byGeno);
         }
-
-        // --- Getters ---
-        public String getClusterId()               { return clusterId; }
-        public List<SeqMeta> getMembers()          { return Collections.unmodifiableList(members); }
-        public SeqMeta getRep()                    { return rep; }
-        public int getSize()                       { return size; }
-        public int getNgenotypes()                 { return ngenotypes; }
-        public int getMinLength()                  { return minLength; }
-        public int getMaxLength()                  { return maxLength; }
-        public double getMeanLength()              { return meanLength; }
-        public double getSdLength()                { return sdLength; }
-        public double getCvLength()                { return cvLength; }
-        public String getMainChrom()               { return mainChrom; }
-        public double getMainChromFraction()       { return mainChromFraction; }
-        public int getNChroms()                    { return nChroms; }
-        public Map<String, List<SeqMeta>> getMembersByGenotype() { return membersByGenotype; }
 
         public String repSummaryTSV() {
             SeqMeta r = getRep();
@@ -412,6 +458,9 @@ public class PanCluster {
                     Integer.toString(r.getLength()),
                     Integer.toString(r.getStart()),
                     Integer.toString(r.getEnd()),
+                    Long.toString(totalKmers),
+                    Long.toString(uniqueKmers),
+                    Long.toString(globalUniqueKmers),
                     Integer.toString(getSize()),
                     Integer.toString(getNgenotypes()),
                     Integer.toString(getMinLength()),
@@ -445,13 +494,29 @@ public class PanCluster {
 
         public String repBEDLine() {
             SeqMeta r = getRep();
-            // BED: chrom, start-1 (0-based BED), end, name
             return String.join("\t",
                     r.getChromCode(),
-                    Integer.toString(Math.max(0, r.getStart() - 1)),   // start in BED is 0-based
+                    Integer.toString(Math.max(0, r.getStart() - 1)),
                     Integer.toString(r.getEnd()),
                     r.getId()
             );
         }
+
+        public String getClusterId() { return clusterId; }
+        public List<SeqMeta> getMembers() { return Collections.unmodifiableList(members); }
+        public SeqMeta getRep() { return rep; }
+        public int getSize() { return size; }
+        public int getNgenotypes() { return ngenotypes; }
+        public int getMinLength() { return minLength; }
+        public int getMaxLength() { return maxLength; }
+        public double getMeanLength() { return meanLength; }
+        public double getSdLength() { return sdLength; }
+        public double getCvLength() { return cvLength; }
+        public String getMainChrom() { return mainChrom; }
+        public double getMainChromFraction() { return mainChromFraction; }
+        public int getNChroms() { return nChroms; }
+        public long getTotalKmers() { return totalKmers; }
+        public long getUniqueKmers() { return uniqueKmers; }
+        public long getGlobalUniqueKmers() { return globalUniqueKmers; }
     }
 }
