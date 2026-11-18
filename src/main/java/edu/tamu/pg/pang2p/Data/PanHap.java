@@ -77,23 +77,25 @@ public class PanHap {
                 String hapID = parts[0];
                 int totalKmers = Integer.parseInt(parts[7]);
 
-                int sampleCount = parts.length - 15;
+                int sampleCount = parts.length - 13;
                 int[] genotype = new int[sampleCount];
                 double[] gtScaled = new double[sampleCount];
                 double[] normalizedCounts = new double[sampleCount];
+                int[] obsCounts = new int[sampleCount];
+                int[] obsTotalCounts = new int[sampleCount];
                 int[] countedKmers = new int[sampleCount];
                 int[] numReads = new int[sampleCount];
 
                 for (int i = 0; i < sampleCount; i++) {
-                    String[] attrs = parts[i + 15].split(":");
+                    String[] attrs = parts[i + 13].split(":");
 
                     genotype[i] = Integer.parseInt(attrs[0]);
                     gtScaled[i] = Double.parseDouble(attrs[1]);
                     normalizedCounts[i] = Double.parseDouble(attrs[2]);
-                    countedKmers[i] = Integer.parseInt(attrs[3]);
-                    numReads[i] = Integer.parseInt(attrs[4]);
+                    obsCounts[i] = Integer.parseInt(attrs[3]);
+                    obsTotalCounts[i] = Integer.parseInt(attrs[4]);
 
-                    sampleSums[i] += numReads[i];
+                    sampleSums[i] += obsCounts[i];
                 }
 
                 HapData hap = hapData.get(hapID);

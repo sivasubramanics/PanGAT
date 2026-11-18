@@ -2,6 +2,7 @@ package edu.tamu.pg.pang2p.Plugins;
 
 import edu.tamu.pg.pang2p.Tasks.Cohort;
 import edu.tamu.pg.pang2p.Tasks.DirectoryStructure;
+import edu.tamu.pg.pang2p.Tasks.KmerCoverage;
 import edu.tamu.pg.pang2p.Tasks.ReadCounts;
 import edu.tamu.pg.pang2p.Utils.HelperFunctions;
 import edu.tamu.pg.pang2p.Utils.Logger;
@@ -30,14 +31,23 @@ public class Genotype implements Callable<Integer>, Runnable {
     @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC [31]", required = false, defaultValue = "31")
     private int kmerSize = 31;
 
+    @Option(names = {"-c", "--min_count"}, description = "Minimum kmer count to consider for genotyping [1]", required = false)
+    private int minCount = 1;
+
     @Option(names = {"-t", "--threads"}, description = "Number of threads to use for processing [2]", required = false, defaultValue = "2")
     private int threads = 2;
 
-    @Option(names = {"--relax"}, description = "Skip remaining kmers in a read once a matching kmer is found", required = false)
-    private boolean relax = false;
+//    @Option(names = {"--relax"}, description = "Skip remaining kmers in a read once a matching kmer is found", required = false)
+//    private boolean relax = false;
 
     @Option(names = {"--skip"}, description = "Process every `skip`-th k-mer for coverage calculation [1]", required = false, defaultValue = "1")
     private int skip = 1;
+
+    @Option(names = {"--keep-kmc"}, description = "Keep KMC intermediate files after processing", required = false)
+    private boolean keepKmc = false;
+
+    @Option(names = {"--memory"}, description = "Use memory mode for KMC processing", required = false)
+    private boolean memory = false;
 
     private final String CLASS_NAME = this.getClass().getSimpleName();
 
@@ -96,18 +106,32 @@ public class Genotype implements Callable<Integer>, Runnable {
 
             Logger.info(CLASS_NAME, "Calculating k-mer coverage for sample: " + sampleName);
 
-            ReadCounts countReads = new ReadCounts(
+//            ReadCounts countReads = new ReadCounts(
+//                    referenceFile,
+//                    inputList,
+//                    outputCovFile,
+//                    kmerSize,
+//                    threads,
+//                    relax,
+//                    skip
+//            );
+
+            KmerCoverage kmerCoverage = new KmerCoverage(
                     referenceFile,
-                    inputList,
+                    sampleName,
+                    inputList.toArray(new Path[0]),
                     outputCovFile,
                     kmerSize,
                     threads,
-                    relax,
-                    skip
+                    minCount,
+                    skip,
+                    memory,
+                    keepKmc
             );
 
             try {
-                countReads.call();
+//                countReads.call();
+                kmerCoverage.call();
             } catch (Exception e) {
                 Logger.error(CLASS_NAME, "Failed to compute coverage for sample: " + sampleName + " - " + e.getMessage());
             }
