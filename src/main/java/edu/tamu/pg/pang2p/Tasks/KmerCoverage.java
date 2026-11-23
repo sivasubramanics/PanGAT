@@ -9,10 +9,9 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Command(name = "kmer-coverage", description = "Calculate k-mer coverage for the given sample", sortOptions = false)
@@ -126,51 +125,37 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
 
         Logger.info(CLASS_NAME, "Processing " + totalSequences + " sequences across " + threads + " threads...");
 
-        ExecutorService executor = Executors.newFixedThreadPool(threads);
-        ExecutorCompletionService<Void> completionService = new ExecutorCompletionService<>(executor);
+        Logger.info(CLASS_NAME, "Processing " + totalSequences + " sequences across " + threads + " threads...");
 
-        AtomicInteger completedSequences = new AtomicInteger(0);
-        AtomicInteger writeCounter = new AtomicInteger(0);
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
 
         KMC kmc = new KMC(outputDir.resolve(sampleName).toString(), memory);
         HelperFunctions.printMemoryUsage("After KMC load");
 
         lastLoggedPercent.set(-1);
+        final int maxPending = Math.max(threads * 4, 1);
+        Deque<Future<String>> pending = new ArrayDeque<>();
+        int written = 0;
+
         try (BufferedWriter writer = Files.newBufferedWriter(outputFile);
              FastaReader fastaReader = new FastaReader(referenceFasta)) {
 
             writer.write("#HapID\tLength\tTotalKmers\tUniqueKmers\tObservedKmers\tObservedTotalKmers\n");
+
             for (Fasta scr : fastaReader) {
-                completionService.submit(() -> {
-                    processFastaRecord(scr, kmc, writer, writeCounter);
+                pending.addLast(executor.submit(() -> processFastaRecord(scr, kmc)));
 
-                    int completed = completedSequences.incrementAndGet();
-                    int percent = (int) ((completed * 100L) / totalSequences);
-
-                    // Ensure progress emission is thread-safe and monotonically increasing
-                    if (percent % 5 == 0) {
-                        synchronized (lastLoggedPercent) {
-                            if (percent > lastLoggedPercent.get()) {
-                                lastLoggedPercent.set(percent);
-                                int dotsCount = percent / 5;
-                                String dots = ".".repeat(dotsCount);
-                                String progressMsg = String.format("Processing %s%d%%", dots, percent);
-
-                                Logger.progress(CLASS_NAME, progressMsg);
-                            }
-                        }
-                    }
-                    return null;
-                });
-            }
-
-            for (int i = 0; i < totalSequences; i++) {
-                try {
-                    completionService.take().get();
-                } catch (Exception e) {
-                    Logger.error(CLASS_NAME, "Error during task execution: " + e.getMessage());
+                // Bound memory: once the window is full, write the oldest result (input order)
+                while (pending.size() >= maxPending) {
+                    writeNext(pending, writer, ++written, totalSequences);
                 }
             }
+
+            // Drain whatever is left, still in input order
+            while (!pending.isEmpty()) {
+                writeNext(pending, writer, ++written, totalSequences);
+            }
+
             writer.flush();
             Logger.info(CLASS_NAME, "Successfully completed k-mer coverage calculation for " + sampleName);
         } catch (Exception e) {
@@ -187,9 +172,9 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     }
 
     /**
-     * Processes individual FASTA sequence records concurrently.
+     * Computes the coverage line for one FASTA record. Does no I/O.
      */
-    private void processFastaRecord(Fasta scr, KMC kmc, BufferedWriter writer, AtomicInteger writeCounter) {
+    private String processFastaRecord(Fasta scr, KMC kmc) {
         KmerIterator it = scr.kmers(kmerSize, kmc.getPrefixLength(), kmc.isBothStrands());
 
         int totalKmers = 0;
@@ -198,15 +183,14 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         long kmerIndex = 0;
 
         Set<Kmer> walkedKmers = new HashSet<>();
+        final int step = Math.max(skip, 1);
 
         while (it.hasNext()) {
             KmerPosition kp = it.next();
 
-            // Only look at every `skip`-th k-mer (skip = 1 keeps all of them)
-            if (kmerIndex++ % skip != 0) {
+            if (kmerIndex++ % step != 0) {
                 continue;
             }
-
             Kmer kmer = kp.getKmer();
             totalKmers++;
 
@@ -216,23 +200,42 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
 
             int obsCount = kmc.getCount(kmer);
             if (obsCount >= minCount) {
+                // if debug is enabled print fasta_name:total_kmers kp.startPos() - kp.startPos() + kmerSize kmer.toString() obsCount
+                if (System.getProperty("DEBUG") != null && System.getProperty("DEBUG").equalsIgnoreCase("true")) {
+                    Logger.debug(CLASS_NAME, scr.getName() + ":" + totalKmers + " " + kp.getStartPos() + " - " + (kp.getStartPos() + kmerSize) + " " + kmer.toString() + " " + obsCount);
+                }
                 obsKmers++;
                 obsTotalKmers += obsCount;
             }
         }
 
         int uniqKmers = walkedKmers.size();
-        String resultLine = scr.getName() + "\t" + scr.getLength() + "\t" + uniqKmers + "\t" + totalKmers + "\t" + obsKmers + "\t" + obsTotalKmers + "\n";
+        return scr.getName() + "\t" + scr.getLength() + "\t" + uniqKmers + "\t" + totalKmers
+                + "\t" + obsKmers + "\t" + obsTotalKmers + "\n";
+    }
 
-        synchronized (writer) {
-            try {
-                writer.write(resultLine);
-                if (writeCounter.incrementAndGet() % FLUSH_INTERVAL == 0) {
-                    writer.flush();
-                }
-            } catch (Exception e) {
-                Logger.error(CLASS_NAME, "Failed to write output record for sequence: " + scr.getName());
-            }
+
+    /**
+     * Waits for the oldest pending task and writes its line, preserving input order.
+     * Runs only on the calling thread, so no synchronization is needed.
+     */
+    private void writeNext(Deque<Future<String>> pending, BufferedWriter writer,
+                           int writtenCount, int totalSequences) throws IOException, InterruptedException {
+        Future<String> head = pending.pollFirst();
+        try {
+            writer.write(head.get());
+        } catch (ExecutionException e) {
+            Logger.error(CLASS_NAME, "Error during task execution: " + e.getCause());
+        }
+
+        if (writtenCount % FLUSH_INTERVAL == 0) {
+            writer.flush();
+        }
+
+        int percent = (int) ((writtenCount * 100L) / totalSequences);
+        if (percent % 5 == 0 && percent > lastLoggedPercent.get()) {
+            lastLoggedPercent.set(percent);
+            Logger.progress(CLASS_NAME, String.format("Processing %s%d%%", ".".repeat(percent / 5), percent));
         }
     }
 

@@ -21,7 +21,8 @@ import java.util.Locale;
                 KmerCoverage.class,
                 Cohort.class,
                 ReadCounts.class,
-                PanCluster.class
+                PanCluster.class,
+                ExtractKmers.class
         })
 public class PanG2P {
     public static void main(String[] args) throws IOException {
@@ -47,7 +48,8 @@ public class PanG2P {
                                         "anchors-test",
                                         "kmer-coverage",
                                         "cohort",
-                                        "count-reads"
+                                        "count-reads",
+                                        "extract-kmers"
                                 )
         );
 
