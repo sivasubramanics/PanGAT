@@ -88,7 +88,7 @@ public class BuildReference implements Callable<Integer>, Runnable {
         Path clustersFile = dirs.getDirectory(PipelineSteps.ANCHORS).resolve("clusters.tsv");
         Path genomeMapFile = dirs.getBaseDir().resolve("genomesMap.csv");
         Path outPrefix = dirs.getDirectory(PipelineSteps.ANCHORS).resolve("pan_clusters");
-        PanCluster panCluster = new PanCluster(scrFile, clustersFile, genomeMapFile, outPrefix, panK, threads, isForce);
+        PanCluster panCluster = new PanCluster(scrFile, clustersFile, genomeMapFile, outPrefix, threads, isForce);
         panCluster.run();
 
         return 0;

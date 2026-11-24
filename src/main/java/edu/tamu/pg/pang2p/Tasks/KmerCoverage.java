@@ -39,7 +39,7 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     private int minCount = 1;
 
     @Option(names = {"--skip"}, description = "Only consider every Nth k-mer of each sequence (1 = every k-mer) [1]", required = false)
-    private int skip = 1;
+    private int skipSize = 1;
 
     @Option(names = {"--memory"}, description = "Should the kmc db loaded into memory", required = false)
     private boolean memory = false;
@@ -61,7 +61,7 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
     }
 
     // Parameterized constructor for programmatically calling this task
-    public KmerCoverage(Path referenceFasta, String sampleName, List<Path> inputFiles, Path outputFile, int kmerSize, int threads, int minCount, int skip, boolean memory, boolean keepKmc) {
+    public KmerCoverage(Path referenceFasta, String sampleName, List<Path> inputFiles, Path outputFile, int kmerSize, int threads, int minCount, int skipSize, boolean memory, boolean keepKmc) {
         this.referenceFasta = referenceFasta;
         this.sampleName = sampleName;
         this.inputFiles = inputFiles;
@@ -70,7 +70,7 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         this.threads = threads;
         this.minCount = minCount;
         this.memory = memory;
-        this.skip = skip;
+        this.skipSize = skipSize;
         this.keepKmc = keepKmc;
     }
 
@@ -140,6 +140,11 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         try (BufferedWriter writer = Files.newBufferedWriter(outputFile);
              FastaReader fastaReader = new FastaReader(referenceFasta)) {
 
+            writer.write("##parameter=<ID=" + "sampleName" + ",Value=" + sampleName + ">\n");
+            writer.write("##parameter=<ID=" + "kmerSize" + ",Value=" + kmerSize + ">\n");
+            writer.write("##parameter=<ID=" + "skipSize" + ",Value=" + skipSize + ">\n");
+            writer.write("##parameter=<ID=" + "minCount" + ",Value=" + minCount + ">\n");
+            writer.write("##parameter=<ID=" + "numHaps" + ",Value=" + fastaIndex.length() + ">\n");
             writer.write("#HapID\tLength\tTotalKmers\tUniqueKmers\tObservedKmers\tObservedTotalKmers\n");
 
             for (Fasta scr : fastaReader) {
@@ -183,7 +188,7 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         long kmerIndex = 0;
 
         Set<Kmer> walkedKmers = new HashSet<>();
-        final int step = Math.max(skip, 1);
+        final int step = Math.max(skipSize, 1);
 
         while (it.hasNext()) {
             KmerPosition kp = it.next();
@@ -252,8 +257,8 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
         if (kmerSize <= 0 && kmerSize % 2 == 0) {
             Logger.error(CLASS_NAME, "K-mer size should be greater than 0 and odd");
         }
-        if (skip < 1) {
-            Logger.error(CLASS_NAME, "Skip should be at least 1");
+        if (skipSize < 1) {
+            Logger.error(CLASS_NAME, "Skip size should be at least 1");
         }
     }
 
