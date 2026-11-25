@@ -37,6 +37,9 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
     @Option(names = {"--max-heterozygosity"}, description = "Maximum heterozygosity for filtering markers [0.5]", required = false, defaultValue = "0.5")
     private double maxHeterozygosity;
 
+    @Option(names = {"-a", "--attribute"}, description = "Attribute to extract from sample columns [GT, GTScaled, NORM] (default: GT).", required = false, defaultValue = "GT")
+    private String attribute = "GT";
+
     @Option(names = {"--cv"}, description = "CV cutoff for filtering markers [0.3]", required = false)
     private double cvCutoff = 0.3;
 
@@ -53,13 +56,43 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
         this.outPrefix = outPrefix;
     }
 
+    private int resolveAttributeIndex(String attr) {
+        if (attr == null) return 0;
+        return switch (attr.trim().toUpperCase(Locale.ROOT)) {
+            case "GT" -> 0;
+            case "GTSCALED" -> 1;
+            case "NORM" -> 2;
+            default -> throw new IllegalArgumentException(
+                    "Unsupported attribute: " + attr + ". Valid options are [GT, GTScaled, NORM]."
+            );
+        };
+    }
+
+    private String extractField(String sampleCell, int fieldIndex) {
+        String[] parts = sampleCell.split(":", -1);
+        if (fieldIndex < 0 || fieldIndex >= parts.length) {
+            throw new IllegalArgumentException(
+                    "Sample field index " + fieldIndex + " out of bounds for value: " + sampleCell
+            );
+        }
+        return parts[fieldIndex];
+    }
+
     @Override
     public Integer call() throws Exception {
         HelperFunctions.printCommandLine(new CommandLine(this), CLASS_NAME);
         validateInputs();
 
+        int attrIndex = resolveAttributeIndex(attribute);
+        boolean isGT = (attrIndex == 0);
+        String outSuffix = "." + attribute.trim().toLowerCase(Locale.ROOT) + ".tsv";
+        Path outFile = Path.of(outPrefix + "." + attribute.trim() + ".tsv");
+        Path outMapFile = Path.of(outPrefix + ".map.tsv");
+        Path gapitOutFile = Path.of(outPrefix + "." + attribute.trim() + ".GAPIT.RData");
+
         try (BufferedReader reader = FileUtils.reader(panMatrixFile);
-             BufferedWriter writer = FileUtils.writer(outPrefix + ".genotype.tsv")) {
+             BufferedWriter writer = FileUtils.writer(outFile);
+             BufferedWriter mapWriter = FileUtils.writer(outMapFile)) {
 
             String line;
             Set<String> includeGenotypes = loadGenotypeSet(includeGenotypeIdsFile);
@@ -90,7 +123,7 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
             StringBuilder outLine = new StringBuilder(1024);
 
-            Logger.info(CLASS_NAME, "Reading input file " + panMatrixFile + "...");
+            Logger.info(CLASS_NAME, "Reading input file " + panMatrixFile + " (attribute=" + attribute + ")...");
             while ((line = reader.readLine()) != null) {
                 line = line.trim();
                 if (line.isEmpty() || line.startsWith("##")) continue;
@@ -111,6 +144,7 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
                     // Write header
                     outLine.append("ID\tCHR\tSTART\tEND");
+                    mapWriter.write("ID\tORG_GENOME_ID\tORG_CHROM_ID\tSIM_CHROM_ID\tSTART\tEND\tLENGTH\n");
                     for (int idx : targetIndices) {
                         outLine.append("\t").append(header[idx]);
                     }
@@ -130,30 +164,46 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
                     failedCV++;
                 }
 
-                MarkerStats stats = new MarkerStats(tokens, targetIndices);
+                List<String> sampleValues = new ArrayList<>(targetIndices.length);
 
-                if (stats.missingProportion() > maxMissingMarker) {
-                    failedMissingMarker++;
-                    stats.setGood(false);
-                }
-                if (stats.maf() < minMAF) {
-                    failedMAF++;
-                    stats.setGood(false);
-                }
-                if (stats.heterozygosity() > maxHeterozygosity) {
-                    failedHeterozygosity++;
-                    stats.setGood(false);
-                }
+                if (isGT) {
+                    MarkerStats stats = new MarkerStats(tokens, targetIndices);
 
-                if (cvFailed || !stats.isGood()) {
-                    continue;
+                    if (stats.missingProportion() > maxMissingMarker) {
+                        failedMissingMarker++;
+                        stats.setGood(false);
+                    }
+                    if (stats.maf() < minMAF) {
+                        failedMAF++;
+                        stats.setGood(false);
+                    }
+                    if (stats.heterozygosity() > maxHeterozygosity) {
+                        failedHeterozygosity++;
+                        stats.setGood(false);
+                    }
+
+                    if (cvFailed || !stats.isGood()) {
+                        continue;
+                    }
+
+                    globalMissing += stats.alleleCounts[0];
+                    globalHomRef += stats.alleleCounts[1];
+                    globalHet += stats.alleleCounts[2];
+                    globalHomAlt += stats.alleleCounts[3];
+
+                    for (int gt : stats.gtData) {
+                        sampleValues.add(String.valueOf(gt));
+                    }
+                } else {
+                    if (cvFailed) {
+                        continue;
+                    }
+                    for (int idx : targetIndices) {
+                        sampleValues.add(extractField(tokens[idx], attrIndex));
+                    }
                 }
 
                 filteredMarkers++;
-                globalMissing += stats.alleleCounts[0];
-                globalHomRef += stats.alleleCounts[1];
-                globalHet += stats.alleleCounts[2];
-                globalHomAlt += stats.alleleCounts[3];
 
                 // Resolve duplicate CHR + START positions
                 String chr = String.valueOf(HelperFunctions.alphaToInt(tokens[3], Defaults.CHROM_CODE_LENGTH) + 1);
@@ -175,11 +225,12 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
                         .append(chr).append("\t")       // CHR
                         .append(startPos).append("\t")  // Start (adjusted if duplicate)
                         .append(endPos);                // End (adjusted if duplicate)
-                for (int gt : stats.gtData) {
-                    outLine.append("\t").append(gt);
+                for (String val : sampleValues) {
+                    outLine.append("\t").append(val);
                 }
                 outLine.append("\n");
                 writer.write(outLine.toString());
+                mapWriter.write(tokens[0] + "\t" + tokens[1] + "\t" + tokens[2] + "\t" + tokens[3] + "\t" + tokens[4] + "\t" + tokens[5] + "\t" + tokens[6] + "\n");
                 outLine.setLength(0);
             }
 
@@ -194,19 +245,23 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
             Logger.info(CLASS_NAME, "-------------------- Marker Filters --------------------");
             Logger.info(CLASS_NAME, String.format("%-35s: %10d", "Total markers input", totalMarkers));
             Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed CV (< %.2f)", cvCutoff), failedCV));
-            Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed missing (> %.2f)", maxMissingMarker), failedMissingMarker));
-            Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed MAF (< %.2f)", minMAF), failedMAF));
-            Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed het (> %.2f)", maxHeterozygosity), failedHeterozygosity));
+            if (isGT) {
+                Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed missing (> %.2f)", maxMissingMarker), failedMissingMarker));
+                Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed MAF (< %.2f)", minMAF), failedMAF));
+                Logger.info(CLASS_NAME, String.format("%-35s: %10d", String.format("Failed het (> %.2f)", maxHeterozygosity), failedHeterozygosity));
+            }
             Logger.info(CLASS_NAME, String.format("%-35s: %10d", "Total markers removed", failedTotal));
             Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Passed markers", filteredMarkers, retainPct));
 
-            Logger.info(CLASS_NAME, "------------------ Genotype Distribution ---------------");
-            long totalCalls = globalHomRef + globalHet + globalHomAlt + globalMissing;
-            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Hom Ref (0)", globalHomRef, totalCalls > 0 ? (globalHomRef * 100.0 / totalCalls) : 0));
-            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Het (1)", globalHet, totalCalls > 0 ? (globalHet * 100.0 / totalCalls) : 0));
-            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Hom Alt (2)", globalHomAlt, totalCalls > 0 ? (globalHomAlt * 100.0 / totalCalls) : 0));
-            Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Missing (-1)", globalMissing, totalCalls > 0 ? (globalMissing * 100.0 / totalCalls) : 0));
-            Logger.info(CLASS_NAME, "--------------------------------------------------------");
+            if (isGT) {
+                Logger.info(CLASS_NAME, "------------------ Genotype Distribution ---------------");
+                long totalCalls = globalHomRef + globalHet + globalHomAlt + globalMissing;
+                Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Hom Ref (0)", globalHomRef, totalCalls > 0 ? (globalHomRef * 100.0 / totalCalls) : 0));
+                Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Het (1)", globalHet, totalCalls > 0 ? (globalHet * 100.0 / totalCalls) : 0));
+                Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Hom Alt (2)", globalHomAlt, totalCalls > 0 ? (globalHomAlt * 100.0 / totalCalls) : 0));
+                Logger.info(CLASS_NAME, String.format("%-35s: %10d (%.2f%%)", "Missing (-1)", globalMissing, totalCalls > 0 ? (globalMissing * 100.0 / totalCalls) : 0));
+                Logger.info(CLASS_NAME, "--------------------------------------------------------");
+            }
 
             writer.flush();
         } catch (Exception e) {
@@ -215,7 +270,7 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
         // Run GAPIT conversion outside try-with-resources to guarantee file handles are closed
         if (gapit) {
-            convertGTtoGAPIT();
+            convertGTtoGAPIT(outFile, gapitOutFile);
         }
         return 0;
     }
@@ -302,7 +357,80 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
         }
     }
 
-    private void convertGTtoGAPIT() {
+    private String escapeRPath(Path path) {
+        return path.toString().replace("\\", "/").replace("'", "\\'");
+    }
+
+    private void convertGTtoGAPIT(Path inputMatrixPath, Path gapitOutputPath) {
+        Logger.info(CLASS_NAME, "Converting matrix to GAPIT format via temporary RScript...");
+
+        File tempScript = null;
+        try {
+            tempScript = File.createTempFile("convertGTmatrixToRdata_", ".R");
+
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempScript))) {
+                writer.write(String.format(
+                        "gt <- read.table('%s', header = TRUE, sep = '\\t', check.names = FALSE)\n" +
+                                "\n" +
+                                "# 1. Extract Genotype Map (GM)\n" +
+                                "GM <- data.frame(\n" +
+                                "  Name = gt$ID,\n" +
+                                "  Chromosome = gt$CHR,\n" +
+                                "  Position = gt$START,\n" +
+                                "  stringsAsFactors = FALSE\n" +
+                                ")\n" +
+                                "\n" +
+                                "# 2. Extract Genotype Data (GD)\n" +
+                                "gt_matrix <- as.matrix(gt[, 5:ncol(gt)])\n" +
+                                "rownames(gt_matrix) <- gt$ID\n" +
+                                "GD_transposed <- t(gt_matrix)\n" +
+                                "\n" +
+                                "GD <- data.frame(\n" +
+                                "  Taxa = rownames(GD_transposed),\n" +
+                                "  GD_transposed,\n" +
+                                "  row.names = NULL,\n" +
+                                "  check.names = FALSE,\n" +
+                                "  stringsAsFactors = FALSE\n" +
+                                ")\n" +
+                                "\n" +
+                                "# 3. Save output file\n" +
+                                "save(GD, GM, file = '%s')\n",
+                        escapeRPath(inputMatrixPath),
+                        escapeRPath(gapitOutputPath)
+                ));
+            }
+
+            ProcessBuilder pb = new ProcessBuilder("Rscript", tempScript.getAbsolutePath());
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
+
+            try (BufferedReader rReader = new BufferedReader(new InputStreamReader(proc.getInputStream()))) {
+                String rLine;
+                while ((rLine = rReader.readLine()) != null) {
+                    Logger.info(CLASS_NAME, "[Rscript] " + rLine);
+                }
+            }
+
+            int exitCode = proc.waitFor();
+            if (exitCode == 0) {
+                Logger.info(CLASS_NAME, "Successfully generated GAPIT file: " + gapitOutputPath);
+            } else {
+                Logger.error(CLASS_NAME, "Rscript exited with non-zero code: " + exitCode);
+            }
+
+        } catch (IOException e) {
+            Logger.error(CLASS_NAME, "Failed to create or write temporary R script: " + e.getMessage());
+        } catch (InterruptedException e) {
+            Logger.error(CLASS_NAME, "Rscript execution was interrupted: " + e.getMessage());
+            Thread.currentThread().interrupt();
+        } finally {
+            if (tempScript != null && tempScript.exists()) {
+                tempScript.delete();
+            }
+        }
+    }
+
+    private void convertGTtoGAPIT(Path inputMatrixPath) {
         Logger.info(CLASS_NAME, "Converting genotype matrix to GAPIT format via temporary RScript...");
 
         File tempScript = null;
@@ -311,7 +439,7 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
 
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(tempScript))) {
                 writer.write(String.format(
-                        "gt <- read.table('%s.genotype.tsv', header = TRUE, check.names = FALSE)\n" +
+                        "gt <- read.table('%s', header = TRUE, check.names = FALSE)\n" +
                                 "\n" +
                                 "# 1. Extract Genotype Map (GM)\n" +
                                 "GM <- data.frame(\n" +
@@ -335,10 +463,9 @@ public class ExportMatrix implements Runnable, Callable<Integer> {
                                 ")\n" +
                                 "\n" +
                                 "# 3. Save output files\n" +
-                                "save(GD, GM, file = '%s.GAPIT.RData')\n" +
-                                "# write.table(GM, '%s.map.tsv', sep = '\\t', quote = FALSE, row.names = FALSE)\n" +
-                                "# write.table(GD, '%s.gt.tsv', sep = '\\t', quote = FALSE, row.names = FALSE)\n",
-                        outPrefix, outPrefix, outPrefix, outPrefix
+                                "save(GD, GM, file = '%s.GAPIT.RData')\n",
+                        inputMatrixPath.toString().replace("'", "\\'"),
+                        outPrefix.replace("'", "\\'")
                 ));
             }
 

@@ -32,20 +32,17 @@ public class HapData implements Comparable<HapData> {
     private int[] obsCounts = new int[0];
     private int[] obsTotalCounts = new int[0];
 
-    public HapData(String clusterID, String hapID, String newGenomeID, String newChromID,
-                   String orgGenomeID, String orgChromID, int start, int end, int length, int totKmers, int uniqueKmers, int globalUniqueKmers) {
-        this.clusterID = clusterID;
+    public HapData(String hapID, String orgGenomeID, String orgChromID, String simChromID, int start, int end, int length) {
         this.hapID = hapID;
-        this.newGenomeID = newGenomeID;
-        setNewChromID(newChromID);
         this.orgGenomeID = orgGenomeID;
         this.orgChromID = orgChromID;
+        this.simChromID = simChromID;
         this.start = start;
         this.end = end;
         this.length = length;
-        this.totKmers = totKmers;
-        this.uniqueKmers = uniqueKmers;
-        this.globalUniqueKmers = globalUniqueKmers;
+        this.totKmers = 0;
+        this.uniqueKmers = 0;
+        this.globalUniqueKmers = 0;
     }
 
     public void initCounts(int nSamples) {
@@ -174,14 +171,6 @@ public class HapData implements Comparable<HapData> {
     public void setHapID(String hapID) { this.hapID = hapID; }
     public void setNewGenomeID(String newGenomeID) { this.newGenomeID = newGenomeID; }
 
-    public void setNewChromID(String newChromID) {
-        this.newChromID = newChromID;
-        if (newChromID != null && newChromID.length() >= Defaults.CHROM_CODE_LENGTH) {
-            this.simChromID = newChromID.substring(Defaults.CHROM_CODE_LENGTH);
-        } else {
-            this.simChromID = newChromID;
-        }
-    }
 
     public void setOrgGenomeID(String orgGenomeID) { this.orgGenomeID = orgGenomeID; }
     public void setOrgChromID(String orgChromID) { this.orgChromID = orgChromID; }
@@ -199,6 +188,15 @@ public class HapData implements Comparable<HapData> {
 
     private double roundTo2Decimals(double val) {
         return Math.round(val * 100.0) / 100.0;
+    }
+
+    public void setNewChromID(String newChromID) {
+        this.newChromID = newChromID;
+        if (newChromID != null && newChromID.length() >= Defaults.CHROM_CODE_LENGTH) {
+            this.simChromID = newChromID.substring(Defaults.CHROM_CODE_LENGTH);
+        } else {
+            this.simChromID = newChromID;
+        }
     }
 
     @Override

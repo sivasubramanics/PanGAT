@@ -28,8 +28,8 @@ public class Genotype implements Callable<Integer>, Runnable {
     @Option(names = {"-s", "--samples"}, description = "Path to the samples CSV file (format: id,path)", required = true)
     private Path samplesFile;
 
-    @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC [31]", required = false, defaultValue = "31")
-    private int kmerSize = 31;
+    @Option(names = {"-k", "--kmer"}, description = "K-mer size for KMC [51]", required = false, defaultValue = "51")
+    private int kmerSize = 51;
 
     @Option(names = {"-c", "--min_count"}, description = "Minimum kmer count to consider for genotyping [1]", required = false)
     private int minCount = 1;
@@ -38,7 +38,7 @@ public class Genotype implements Callable<Integer>, Runnable {
     private int threads = 2;
 
     @Option(names = {"--skip"}, description = "Process every `skip`-th k-mer for coverage calculation [1]", required = false, defaultValue = "1")
-    private int skip = 1;
+    private int skipSize = 1;
 
     @Option(names = {"--keep-kmc"}, description = "Keep KMC intermediate files after processing", required = false)
     private boolean keepKmc = false;
@@ -111,7 +111,7 @@ public class Genotype implements Callable<Integer>, Runnable {
                     kmerSize,
                     threads,
                     minCount,
-                    skip,
+                    skipSize,
                     memory,
                     keepKmc
             );
@@ -126,6 +126,10 @@ public class Genotype implements Callable<Integer>, Runnable {
         Logger.info(CLASS_NAME, "Aggregating coverage across cohort samples...");
         Cohort cohort = new Cohort(
                 dirs.getPanClustersRepFile(),
+                dirs.getSingleCopyReference(),
+                kmerSize,
+                skipSize,
+                threads,
                 coverageFiles.toArray(new Path[0]),
                 sampleNames.toArray(new String[0]),
                 dirs.getCohortBase(name),
@@ -187,7 +191,7 @@ public class Genotype implements Callable<Integer>, Runnable {
         if (minCount < 1) {
             Logger.error(CLASS_NAME, "Minimum k-mer count must be at least 1.");
         }
-        if (skip < 1) {
+        if (skipSize < 1) {
             Logger.error(CLASS_NAME, "Skip value must be at least 1.");
         }
     }

@@ -1,9 +1,6 @@
 package edu.tamu.pg.pang2p.Data;
 
-import edu.tamu.pg.pang2p.Utils.FileUtils;
-import edu.tamu.pg.pang2p.Utils.KMCConfig;
-import edu.tamu.pg.pang2p.Utils.KMCExecutor;
-import edu.tamu.pg.pang2p.Utils.Logger;
+import edu.tamu.pg.pang2p.Utils.*;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -18,11 +15,6 @@ public class PanHap {
     private static final String CLASS_NAME = PanHap.class.getSimpleName();
     private static final int FIXED_COLS = 15;          // columns before the sample columns
     private static final double SCALE = 1_000_000_000.0;
-    private int kmerSize = 0;
-    private int skipSize = 0;
-    private int minCount = 0;
-    private int numHaps = 0;
-    private int numSamples = 0;
 
     private final Map<String, HapData> hapData = new ConcurrentHashMap<>();
     private final List<String> samples = new ArrayList<>();
@@ -31,7 +23,8 @@ public class PanHap {
 
     private String version = "0.0.1";
     private final List<String> commandLines = new ArrayList<>();
-    private final Map<String, String> parameters = new LinkedHashMap<>();
+    private final Params parameters = new Params();
+    private boolean minCountSet = false;
 
     private PanHap() {}
 
@@ -39,18 +32,21 @@ public class PanHap {
     // Factories
     // ------------------------------------------------------------------
 
-    /** Start a new PanHap from a pan-cluster representative file (no samples yet). */
-    public static PanHap init(Path repFile) {
-        PanHap ph = new PanHap();
-        ph.readRepFile(repFile);
-        return ph;
+    /** Start a new PanHap from a pan-cluster representative file and k-mer counts. */
+    public PanHap(Path repFile, Path panClusterFastaFile, int kmerSize, int skipSize, int threads) {
+        this.readRepFile(repFile);
+        try {
+            this.addOrUpdateKmerCounts(panClusterFastaFile, kmerSize, skipSize, threads);
+        } catch (IOException e) {
+            throw new RuntimeException("Error counting k-mers for pan-cluster fasta: " + panClusterFastaFile, e);
+        }
+        parameters.set("kmerSize", kmerSize);
+        parameters.set("skipSize", skipSize);
     }
 
-    /** Resume from a previously written matrix. The rep file supplies hap definitions. */
-    public static PanHap init(Path panHapFile, Path repFile) {
-        PanHap ph = init(repFile);
-        ph.readMatrix(panHapFile);
-        return ph;
+    /** Resume from a previously written matrix. */
+    public PanHap(Path panHapFile) {
+        this.readMatrix(panHapFile);
     }
 
     // ------------------------------------------------------------------
@@ -64,58 +60,45 @@ public class PanHap {
         int localMinCount = 0;
         int localSkipSize = 0;
         int localNumHaps = 0;
+        int sampleIdx = -1;
+
         try (BufferedReader reader = FileUtils.reader(covFile)) {
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.trim().isEmpty()) continue;
-                if (line.startsWith("##")) {
-                    if (line.startsWith("parameter=<") && line.endsWith(">")) {
-                        String body = line.substring("parameter=<".length(), line.length() - 1);
-                        String key = "", value = "";
-                        for (String kv : body.split(",")) {
-                            String[] t = kv.split("=", 2);
-                            if (t.length < 2) continue;
-                            if (t[0].equals("ID")) key = t[1];
-                            else if (t[0].equals("Value")) value = t[1];
-                        }
-                        if (key.equals("sampleName")) {
-                            localSampleName = value;
-                        } else if (key.equals("kmerSize")) {
-                            localKmerSize = Integer.parseInt(value);
-                        } else if (key.equals("minCount")) {
-                            localMinCount = Integer.parseInt(value);
-                        } else if (key.equals("skipSize")) {
-                            localSkipSize = Integer.parseInt(value);
-                        } else if (key.equals("numHaps")) {
-                            // ignore these, they are not needed for adding a sample
-                            localNumHaps = Integer.parseInt(value);
-                        } else {
-                            Logger.error(CLASS_NAME, "Unknown parameter in count file: " + key);
-                        }
+
+                if (line.startsWith("##parameter=<") && line.endsWith(">")) {
+                    String body = line.substring("##parameter=<".length(), line.length() - 1);
+                    String key = "", value = "";
+                    for (String kv : body.split(",")) {
+                        String[] t = kv.split("=", 2);
+                        if (t.length < 2) continue;
+                        if (t[0].equals("ID")) key = t[1];
+                        else if (t[0].equals("Value")) value = t[1];
                     }
-                }
-                if (line.startsWith("HapID") || line.startsWith("# HapID")) {
-                    if (kmerSize != localKmerSize) {
-                        Logger.error(CLASS_NAME, "K-mer size mismatch: expected " + kmerSize + ", found " + localKmerSize);
+                    switch (key) {
+                        case "sampleName" -> localSampleName = value;
+                        case "kmerSize" -> localKmerSize = Integer.parseInt(value);
+                        case "minCount" -> localMinCount = Integer.parseInt(value);
+                        case "skipSize" -> localSkipSize = Integer.parseInt(value);
+                        case "numHaps" -> localNumHaps = Integer.parseInt(value);
+                        default -> Logger.error(CLASS_NAME, "Unknown parameter in count file: " + key);
                     }
-                    if (minCount != localMinCount) {
-                        Logger.error(CLASS_NAME, "Min count mismatch: expected " + minCount + ", found " + localMinCount);
-                    }
-                    if (skipSize != localSkipSize) {
-                        Logger.error(CLASS_NAME, "Skip size mismatch: expected " + skipSize + ", found " + localSkipSize);
-                    }
-                    if (numHaps != localNumHaps) {
-                        Logger.error(CLASS_NAME, "Number of haplotypes mismatch: expected " + numHaps + ", found " + localNumHaps);
-                    }
-                    registerSample(localSampleName);
                     continue;
+                }
+
+                if (line.startsWith("HapID") || line.startsWith("# HapID")) {
+                    sampleIdx = applyAndValidateCovParams(localSampleName, localKmerSize, localMinCount, localSkipSize, localNumHaps);
+                    continue;
+                }
+
+                if (line.startsWith("#")) continue;
+                if (sampleIdx < 0) {
+                    sampleIdx = applyAndValidateCovParams(localSampleName, localKmerSize, localMinCount, localSkipSize, localNumHaps);
                 }
 
                 String[] p = line.split("\t");
                 String hapID = p[0];
-                int length = Integer.parseInt(p[1]);
-                int totalKmers = Integer.parseInt(p[2]);
-                int uniqueKmers = Integer.parseInt(p[3]);
                 int obsKmers = Integer.parseInt(p[4]);
                 int obsTotalKmers = Integer.parseInt(p[5]);
 
@@ -125,6 +108,7 @@ public class PanHap {
                     continue;
                 }
                 hap.addSample(obsKmers, obsTotalKmers);
+                sampleSums[sampleIdx] += obsKmers;
             }
         } catch (IOException e) {
             throw new RuntimeException("Error reading coverage file: " + covFile, e);
@@ -132,11 +116,39 @@ public class PanHap {
         return this;
     }
 
-        // ------------------------------------------------------------------
+    private int applyAndValidateCovParams(
+            String localSampleName,
+            int localKmerSize,
+            int localMinCount,
+            int localSkipSize,
+            int localNumHaps
+    ) {
+        if (parameters.get("kmerSize") != 0 && parameters.get("kmerSize") != localKmerSize) {
+            Logger.error(CLASS_NAME, "K-mer size mismatch: expected " + parameters.get("kmerSize") + ", found " + localKmerSize);
+        }
+        if (parameters.get("skipSize") != 0 && parameters.get("skipSize") != localSkipSize) {
+            Logger.error(CLASS_NAME, "Skip size mismatch: expected " + parameters.get("skipSize") + ", found " + localSkipSize);
+        }
+        if (parameters.get("numHaps") != 0 && parameters.get("numHaps") != localNumHaps) {
+            Logger.error(CLASS_NAME, "Number of haplotypes mismatch: expected " + parameters.get("numHaps") + ", found " + localNumHaps);
+        }
+
+        if (samples.isEmpty() && !minCountSet) {
+            parameters.set("minCount", localMinCount);
+            minCountSet = true;
+        } else if (parameters.get("minCount") != localMinCount) {
+            Logger.error(CLASS_NAME, "Min count mismatch: expected " + parameters.get("minCount") + ", found " + localMinCount);
+        }
+
+        return registerSample(localSampleName);
+    }
+
+    // ------------------------------------------------------------------
     // Reading internals
     // ------------------------------------------------------------------
 
     private void readRepFile(Path repFile) {
+        Logger.info(CLASS_NAME, "Loading pan-cluster representative file: " + repFile);
         try (BufferedReader reader = FileUtils.reader(repFile)) {
             String line;
             boolean header = true;
@@ -144,23 +156,23 @@ public class PanHap {
                 if (line.trim().isEmpty()) continue;
                 if (header) { header = false; continue; }
                 String[] p = line.split("\t");
+                String simChromID = getSimChromID(p[3]);
                 hapData.computeIfAbsent(p[1], k -> new HapData(
-                        p[0], p[1], p[2], p[3], p[4], p[5],
+                        p[1], p[4], p[5], simChromID,
                         Integer.parseInt(p[7]),    // start
                         Integer.parseInt(p[8]),    // end
-                        Integer.parseInt(p[6]),    // length
-                        Integer.parseInt(p[9]),    // totalKmers
-                        Integer.parseInt(p[10]),   // uniqueKmers
-                        Integer.parseInt(p[11]))); // globalUniqueKmers
+                        Integer.parseInt(p[6])     // length
+                ));
             }
-            numHaps = hapData.size();
-            Logger.info(CLASS_NAME, "Loaded " + numHaps + " hap data");
+            parameters.set("numHaps", hapData.size());
+            Logger.info(CLASS_NAME, "Loaded " + parameters.get("numHaps") + " hap data");
         } catch (IOException e) {
             throw new RuntimeException("Error reading rep file: " + repFile, e);
         }
     }
 
-    public PanHap addOrUpdateKmerCounts(Path panClusterFastaFile, int kmerSize, int stepSize, int nThreads) throws IOException {
+    public PanHap addOrUpdateKmerCounts(Path panClusterFastaFile, int kmerSize, int skipSize, int nThreads) throws IOException {
+        Logger.info(CLASS_NAME, "Counting k-mers for pan-cluster fasta: " + panClusterFastaFile);
         Path kmcDB = Path.of(panClusterFastaFile + ".k" + kmerSize);
         KMCConfig kmcConfig = KMCConfig.builder()
                 .inputPaths(panClusterFastaFile)
@@ -172,17 +184,34 @@ public class PanHap {
         KMCExecutor.run(kmcConfig);
 
         ExecutorService executor = Executors.newFixedThreadPool(nThreads);
+        Deque<Future<?>> pending = new ArrayDeque<>();
+        int lastLoggedPercent = 0;
+
         try (FastaReader reader = new FastaReader(panClusterFastaFile);
              KMC kmc = new KMC(kmcDB, true)) {
 
             int prefixLength = kmc.getPrefixLength();
-            List<Future<?>> futures = new ArrayList<>();
             for (Fasta fasta : reader) {
-                futures.add(executor.submit(() -> countKmers(fasta, kmc, kmerSize, prefixLength)));
+                pending.addLast(executor.submit(() -> countKmers(fasta, kmc, kmerSize, skipSize, prefixLength)));
+                while (!pending.isEmpty() && pending.peekFirst().isDone()) {
+                    pending.pollFirst().get();
+                }
             }
-            // Wait for every task BEFORE the try block closes kmc/reader,
-            // and surface any exception thrown inside a worker.
-            for (Future<?> f : futures) f.get();
+
+            int totalTasks = pending.size();
+            int completed = 0;
+            while (!pending.isEmpty()) {
+                pending.pollFirst().get();
+                completed++;
+                int percent = (int) ((completed * 100L) / Math.max(1, totalTasks));
+                if (percent % 5 == 0 && percent > lastLoggedPercent) {
+                    lastLoggedPercent = percent;
+                    Logger.progress(
+                            CLASS_NAME,
+                            String.format("Counting k-mers %s%d%%", ".".repeat(percent / 5), percent)
+                    );
+                }
+            }
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -193,13 +222,8 @@ public class PanHap {
             executor.shutdownNow();
         }
 
-        // Stored as parameters so they are written to the matrix header
-        // and restored when the matrix is reloaded.
-        parameters.put("kmerSize", String.valueOf(kmerSize));
-        parameters.put("minCount", String.valueOf(minCount));
-        parameters.put("skipSize", String.valueOf(skipSize));
-        parameters.put("numHaps", String.valueOf(numHaps));
-        parameters.put("numSamples", String.valueOf(numSamples));
+        parameters.set("kmerSize", kmerSize);
+        parameters.set("skipSize", skipSize);
         return this;
     }
 
@@ -217,9 +241,9 @@ public class PanHap {
                 }
                 parseMatrixRow(line.split("\t"));
             }
-            numHaps = hapData.size();
-            numSamples = samples.size();
-            Logger.info(CLASS_NAME, "Loaded " + numHaps + " haps, " + numSamples + " samples");
+            parameters.set("numHaps", hapData.size());
+            parameters.set("numSamples", samples.size());
+            Logger.info(CLASS_NAME, "Loaded " + parameters.get("numHaps") + " hap data for " + parameters.get("numSamples") + " samples");
         } catch (IOException e) {
             throw new RuntimeException("Error reading matrix file: " + matrixFile, e);
         }
@@ -240,11 +264,13 @@ public class PanHap {
             sampleSums[i] += obs[i];
         }
 
+        hapData.computeIfAbsent(p[0], k -> new HapData(
+                p[0], p[1], p[2], p[3],
+                Integer.parseInt(p[4]),    // start
+                Integer.parseInt(p[5]),    // end
+                Integer.parseInt(p[6])     // length
+        ));
         HapData hap = hapData.get(p[0]);
-        if (hap == null) {
-            Logger.error(CLASS_NAME, "HapID " + p[0] + " in matrix not found in rep file.");
-            return;
-        }
         hap.setTotKmers(Integer.parseInt(p[7]));
         hap.setUniqueKmers(Integer.parseInt(p[8]));
         hap.setGlobalUniqueKmers(Integer.parseInt(p[9]));
@@ -256,13 +282,17 @@ public class PanHap {
     }
 
     private int registerSample(String id) {
-        int idx = samples.size();
-        if (sampleIndex.containsKey(id)) {
-            Logger.error(CLASS_NAME, "Sample " + id + " already exists in the pan-matrix. Sample names must be unique.");
+        if (id == null || id.trim().isEmpty()) {
+            throw new IllegalArgumentException("Sample name is null or empty. Sample names must be non-empty strings.");
         }
+        if (sampleIndex.containsKey(id)) {
+            throw new IllegalArgumentException("Sample name " + id + " already exists. Duplicate sample names are not allowed.");
+        }
+        int idx = samples.size();
         samples.add(id);
         sampleIndex.put(id, idx);
         sampleSums = Arrays.copyOf(sampleSums, samples.size());
+        parameters.set("numSamples", samples.size());
         return idx;
     }
 
@@ -280,7 +310,12 @@ public class PanHap {
                 if (t[0].equals("ID")) key = t[1];
                 else if (t[0].equals("Value")) value = t[1];
             }
-            if (!key.isEmpty()) parameters.put(key, value);
+            if (!key.isEmpty()) {
+                parameters.set(key, Integer.parseInt(value));
+                if ("minCount".equals(key)) {
+                    minCountSet = true;
+                }
+            }
         }
     }
 
@@ -310,7 +345,7 @@ public class PanHap {
         return list;
     }
 
-    private void countKmers(Fasta fasta, KMC kmc, int kmerSize, int prefixLength) {
+    private void countKmers(Fasta fasta, KMC kmc, int kmerSize, int skipSize, int prefixLength) {
         HapData hap = hapData.get(fasta.getName());
         if (hap == null) {
             Logger.error(CLASS_NAME, "Sequence " + fasta.getName() + " not found in rep file.");
@@ -320,9 +355,15 @@ public class PanHap {
         KmerIterator it = fasta.kmers(kmerSize, prefixLength, true);
         Set<Kmer> unique = new HashSet<>();
         int total = 0, globalUnique = 0;
+        int kmerIndex = 0;
 
         while (it.hasNext()) {
             Kmer kmer = it.next().getKmer();
+            if (skipSize > 1 && kmerIndex % skipSize != 0) {
+                kmerIndex++;
+                continue;
+            }
+            kmerIndex++;
             total++;
             unique.add(kmer);
             if (kmc.getCount(kmer) == 1) globalUnique++;
@@ -334,7 +375,7 @@ public class PanHap {
     }
 
     public PanHap write(Path out) {
-        normalize(); // explicit, instead of hiding inside getSortedHapData()
+        normalize();
         Logger.info(CLASS_NAME, "Writing pan-genome matrix to: " + out);
         try (BufferedWriter w = FileUtils.writer(out)) {
             writeHeader(w);
@@ -349,12 +390,16 @@ public class PanHap {
     }
 
     private void writeHeader(BufferedWriter w) throws IOException {
+        parameters.set("numHaps", hapData.size());
+        parameters.set("numSamples", samples.size());
+
         w.write("##fileformat=\"PanG2P v0.1.0\"\n");
         w.write("##fileDate=" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + "\n");
         w.write("##version=" + version + "\n");
         for (String cmd : commandLines) w.write("##commandline=" + cmd + "\n");
-        for (Map.Entry<String, String> e : parameters.entrySet())
+        for (Map.Entry<String, Integer> e : parameters.entries()) {
             w.write("##parameter=<ID=" + e.getKey() + ",Value=" + e.getValue() + ">\n");
+        }
         w.write("##FORMAT=<ID=GT:GTScaled:NORM:OBS:TOTAL,Number=5,Description=\"Genotype:GenotypeScaled:NormalizedCount:MappedKmers:MappedTotalKmers\">\n");
         w.write("# hapID\tGenomeID\tChromID\tSimChromID\tStart\tEnd\tLength\tTotKmers\tUniqueKmers\tGlobalUniqueKmers\tMinRPB\tMaxRPB\tMeanRPB\tSdRPB\tCV");
         for (String s : samples) w.write("\t" + s);
@@ -367,24 +412,79 @@ public class PanHap {
 
     public int getHapNum() { return hapData.size(); }
     public int getSampleNum() { return samples.size(); }
-    public int getKmerSize() { return kmerSize; }
-    public int getSkipSize() { return skipSize; }
-    public int getMinCount() { return minCount; }
-    public int getNumHaps() { return numHaps; }
-    public int getNumSamples() { return numSamples; }
+    public int getKmerSize() { return parameters.get("kmerSize"); }
+    public int getSkipSize() { return parameters.get("skipSize"); }
+    public int getMinCount() { return parameters.get("minCount"); }
+    public int getNumHaps() { return parameters.get("numHaps"); }
+    public int getNumSamples() { return parameters.get("numSamples"); }
     public List<String> getSamples() { return Collections.unmodifiableList(samples); }
     public String getVersion() { return version; }
     public PanHap setVersion(String v) { this.version = v; return this; }
-    public List<String> getCommandLines() { return commandLines; }
-    public Map<String, String> getParameters() { return parameters; }
 
     public PanHap addCommandLine(String cmd) {
         if (cmd != null && !cmd.trim().isEmpty()) commandLines.add(cmd);
         return this;
     }
 
-    public PanHap addParameter(String key, String value) {
-        parameters.put(key, value);
-        return this;
+    public String getSimChromID(String newChromID) {
+        if (newChromID != null && newChromID.length() >= Defaults.CHROM_CODE_LENGTH) {
+            return newChromID.substring(Defaults.CHROM_CODE_LENGTH);
+        }
+        return newChromID;
+    }
+
+    private static final class Params {
+        int kmerSize;
+        int minCount;
+        int skipSize;
+        int numHaps;
+        int numSamples;
+
+        void apply(String key, String value) {
+            switch (key) {
+                case "kmerSize" -> this.kmerSize = Integer.parseInt(value);
+                case "minCount" -> this.minCount = Integer.parseInt(value);
+                case "skipSize" -> this.skipSize = Integer.parseInt(value);
+                case "numHaps" -> this.numHaps = Integer.parseInt(value);
+                case "numSamples" -> this.numSamples = Integer.parseInt(value);
+                default -> Logger.error(CLASS_NAME, "Unknown parameter: " + key);
+            }
+        }
+
+        void apply(String key, int value) {
+            switch (key) {
+                case "kmerSize" -> this.kmerSize = value;
+                case "minCount" -> this.minCount = value;
+                case "skipSize" -> this.skipSize = value;
+                case "numHaps" -> this.numHaps = value;
+                case "numSamples" -> this.numSamples = value;
+                default -> Logger.error(CLASS_NAME, "Unknown parameter: " + key);
+            }
+        }
+
+        public void set(String key, int value) {
+            apply(key, value);
+        }
+
+        public int get(String key) {
+            return switch (key) {
+                case "kmerSize" -> kmerSize;
+                case "minCount" -> minCount;
+                case "skipSize" -> skipSize;
+                case "numHaps" -> numHaps;
+                case "numSamples" -> numSamples;
+                default -> 0;
+            };
+        }
+
+        public Set<Map.Entry<String, Integer>> entries() {
+            Map<String, Integer> map = new LinkedHashMap<>();
+            map.put("kmerSize", kmerSize);
+            map.put("minCount", minCount);
+            map.put("skipSize", skipSize);
+            map.put("numHaps", numHaps);
+            map.put("numSamples", numSamples);
+            return map.entrySet();
+        }
     }
 }

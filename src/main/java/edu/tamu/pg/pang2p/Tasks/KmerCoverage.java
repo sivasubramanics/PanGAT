@@ -125,8 +125,6 @@ public class KmerCoverage implements Callable<Integer>, Runnable {
 
         Logger.info(CLASS_NAME, "Processing " + totalSequences + " sequences across " + threads + " threads...");
 
-        Logger.info(CLASS_NAME, "Processing " + totalSequences + " sequences across " + threads + " threads...");
-
         ExecutorService executor = Executors.newFixedThreadPool(threads);
 
         KMC kmc = new KMC(outputDir.resolve(sampleName).toString(), memory);
